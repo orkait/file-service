@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"io"
 	"time"
 )
 
@@ -63,4 +64,50 @@ type FilterOptions struct {
 type FilterSizeRange struct {
 	MinSize int64
 	MaxSize int64
+}
+
+// ========== Batch Operations Types ==========
+
+// FileUploadInput represents input for a single file in batch upload
+type FileUploadInput struct {
+	Reader    io.Reader
+	FileName  string
+	ObjectKey string
+}
+
+// BatchUploadResult represents result of a single file in batch upload
+type BatchUploadResult struct {
+	FileName  string `json:"fileName"`
+	ObjectKey string `json:"objectKey,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Success   bool   `json:"success"`
+}
+
+// BatchUploadResponse represents the complete batch upload response
+type BatchUploadResponse struct {
+	Uploaded      []BatchUploadResult `json:"uploaded"`
+	Failed        []BatchUploadResult `json:"failed"`
+	TotalUploaded int                 `json:"totalUploaded"`
+	TotalFailed   int                 `json:"totalFailed"`
+}
+
+// BatchDownloadRequest represents the batch download request body
+type BatchDownloadRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// BatchDownloadResult represents result of a single file in batch download
+type BatchDownloadResult struct {
+	Path     string `json:"path"`
+	FileName string `json:"fileName"`
+	URL      string `json:"url,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Success  bool   `json:"success"`
+}
+
+// BatchDownloadResponse represents the complete batch download response
+type BatchDownloadResponse struct {
+	Files        []BatchDownloadResult `json:"files"`
+	TotalSuccess int                   `json:"totalSuccess"`
+	TotalFailed  int                   `json:"totalFailed"`
 }

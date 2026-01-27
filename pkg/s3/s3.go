@@ -4,7 +4,9 @@ import (
 	"file-management-service/config"
 	"file-management-service/pkg/cache"
 	"io"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -297,6 +299,92 @@ func (s *S3) DeleteObject(objectKey string) error {
 	}
 
 	return nil
+}
+
+// BatchUploadFiles uploads multiple files to S3 concurrently
+func (s *S3) BatchUploadFiles(files []FileUploadInput) *BatchUploadResponse {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	result := &BatchUploadResponse{
+		Uploaded: []BatchUploadResult{},
+		Failed:   []BatchUploadResult{},
+	}
+
+	for _, file := range files {
+		wg.Add(1)
+		go func(f FileUploadInput) {
+			defer wg.Done()
+
+			err := s.UploadFile(f.Reader, f.ObjectKey)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				result.Failed = append(result.Failed, BatchUploadResult{
+					FileName: f.FileName,
+					Error:    err.Error(),
+					Success:  false,
+				})
+				result.TotalFailed++
+			} else {
+				result.Uploaded = append(result.Uploaded, BatchUploadResult{
+					FileName:  f.FileName,
+					ObjectKey: f.ObjectKey,
+					Success:   true,
+				})
+				result.TotalUploaded++
+			}
+		}(file)
+	}
+
+	wg.Wait()
+	return result
+}
+
+// BatchGenerateDownloadLinks generates download URLs for multiple files concurrently
+func (s *S3) BatchGenerateDownloadLinks(paths []string, urlCache *cache.URLCache) *BatchDownloadResponse {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	result := &BatchDownloadResponse{
+		Files: []BatchDownloadResult{},
+	}
+
+	for _, path := range paths {
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+
+			url, err := s.GenerateDownloadLink(p, urlCache)
+			fileName := filepath.Base(p)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				result.Files = append(result.Files, BatchDownloadResult{
+					Path:     p,
+					FileName: fileName,
+					Error:    err.Error(),
+					Success:  false,
+				})
+				result.TotalFailed++
+			} else {
+				result.Files = append(result.Files, BatchDownloadResult{
+					Path:     p,
+					FileName: fileName,
+					URL:      url,
+					Success:  true,
+				})
+				result.TotalSuccess++
+			}
+		}(path)
+	}
+
+	wg.Wait()
+	return result
 }
 
 // DeleteFolder deletes a folder and its contents recursively from the S3 bucket.

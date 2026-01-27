@@ -6,9 +6,11 @@ import (
 	"file-management-service/pkg/cache"
 	"file-management-service/pkg/s3"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 )
@@ -47,6 +49,16 @@ func RegisterRoutes(e *echo.Echo, config *config.Config, cache *cache.URLCache) 
 
 	e.POST("/create-folder", func(c echo.Context) error {
 		return createFolderHandler(c, config)
+	})
+
+	// Batch upload multiple files
+	e.POST("/batch-upload", func(c echo.Context) error {
+		return batchUploadFileHandler(c, config)
+	})
+
+	// Batch download - get multiple download URLs
+	e.POST("/batch-download", func(c echo.Context) error {
+		return batchDownloadHandler(c, config, cache)
 	})
 
 	// Define route for testing the server
@@ -312,5 +324,110 @@ func deleteFolderHandler(c echo.Context, config *config.Config) error {
 // ping is a simple handler to test the server
 func ping(c echo.Context) error {
 	response := map[string]string{"message": "pong"}
+	return c.JSON(http.StatusOK, response)
+}
+
+// batchUploadFileHandler handles uploading multiple files in a single request
+func batchUploadFileHandler(c echo.Context, config *config.Config) error {
+	folderPath := c.FormValue("path")
+
+	// Parse multipart form
+	form, err := c.MultipartForm()
+	if err != nil {
+		response := s3.GetFailureResponse(errors.New("failed to parse multipart form"))
+		return c.JSON(http.StatusBadRequest, response)
+	}
+
+	files := form.File["files"]
+	if len(files) == 0 {
+		response := s3.GetFailureResponse(errors.New("no files provided"))
+		return c.JSON(http.StatusBadRequest, response)
+	}
+
+	// Limit batch size to 100 files
+	if len(files) > 100 {
+		response := s3.GetFailureResponse(errors.New("maximum 100 files allowed per batch"))
+		return c.JSON(http.StatusBadRequest, response)
+	}
+
+	// Create S3 client
+	client, err := s3.NewClient(config)
+	if err != nil {
+		errorMessage := fmt.Sprintf("Failed to create S3 client: %s", err.Error())
+		response := s3.GetFailureResponse(errors.New(errorMessage))
+		return c.JSON(http.StatusInternalServerError, response)
+	}
+
+	// Prepare files for batch upload
+	var uploadInputs []s3.FileUploadInput
+	var openedFiles []multipart.File // Track opened files for cleanup
+
+	for _, file := range files {
+		src, err := file.Open()
+		if err != nil {
+			continue // Skip files that can't be opened
+		}
+		openedFiles = append(openedFiles, src)
+
+		// Build object key with folder path
+		objectKey := file.Filename
+		if folderPath != "" {
+			if strings.HasSuffix(folderPath, "/") {
+				objectKey = folderPath + objectKey
+			} else {
+				objectKey = folderPath + "/" + objectKey
+			}
+		}
+
+		uploadInputs = append(uploadInputs, s3.FileUploadInput{
+			Reader:    src,
+			FileName:  file.Filename,
+			ObjectKey: objectKey,
+		})
+	}
+
+	// Perform batch upload
+	result := client.BatchUploadFiles(uploadInputs)
+
+	// Close all opened files after upload completes
+	for _, f := range openedFiles {
+		f.Close()
+	}
+
+	response := s3.GetSuccessResponseWithData(result)
+	return c.JSON(http.StatusOK, response)
+}
+
+// batchDownloadHandler handles generating download URLs for multiple files
+func batchDownloadHandler(c echo.Context, config *config.Config, urlCache *cache.URLCache) error {
+	var req s3.BatchDownloadRequest
+	if err := c.Bind(&req); err != nil {
+		response := s3.GetFailureResponse(errors.New("invalid request body"))
+		return c.JSON(http.StatusBadRequest, response)
+	}
+
+	if len(req.Paths) == 0 {
+		response := s3.GetFailureResponse(errors.New("no paths provided"))
+		return c.JSON(http.StatusBadRequest, response)
+	}
+
+	// Limit batch size to 100 files
+	if len(req.Paths) > 100 {
+		response := s3.GetFailureResponse(errors.New("maximum 100 files allowed per batch"))
+		return c.JSON(http.StatusBadRequest, response)
+	}
+
+	// Create S3 client
+	client, err := s3.NewClient(config)
+	if err != nil {
+		errorMessage := fmt.Sprintf("Failed to create S3 client: %s", err.Error())
+		response := s3.GetFailureResponse(errors.New(errorMessage))
+		return c.JSON(http.StatusInternalServerError, response)
+	}
+
+	// Generate download URLs for all paths
+	result := client.BatchGenerateDownloadLinks(req.Paths, urlCache)
+
+	response := s3.GetSuccessResponseWithData(result)
 	return c.JSON(http.StatusOK, response)
 }

@@ -33,6 +33,15 @@ func GetSuccessResponse(message string) SuccessResponse {
 	}
 }
 
+// GetSuccessResponseWithData returns a success response with any data type
+func GetSuccessResponseWithData(data interface{}) SuccessResponse {
+	return SuccessResponse{
+		Status:       "Success",
+		ResponseCode: http.StatusOK,
+		Data:         data,
+	}
+}
+
 // custom function to sort the files by name or last modified
 func SortFiles(files []ObjectDetails, c echo.Context) *[]ObjectDetails {
 	sortBy := c.QueryParam("sortBy")

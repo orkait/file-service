@@ -1,8 +1,10 @@
 package s3
 
 import (
+	"context"
 	"file-management-service/config"
 	"file-management-service/pkg/cache"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 )
+
+// Default number of concurrent workers for batch operations
+const DefaultMaxWorkers = 10
 
 // S3 represents the Amazon S3 service.
 type S3 struct {
@@ -301,90 +306,195 @@ func (s *S3) DeleteObject(objectKey string) error {
 	return nil
 }
 
-// BatchUploadFiles uploads multiple files to S3 concurrently
-func (s *S3) BatchUploadFiles(files []FileUploadInput) *BatchUploadResponse {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
+// buildUploadResult creates a BatchUploadResult from file and error
+func buildUploadResult(file FileUploadInput, err error) BatchUploadResult {
+	if err != nil {
+		return BatchUploadResult{
+			FileName: file.FileName,
+			Error:    err.Error(),
+			Success:  false,
+		}
+	}
+	return BatchUploadResult{
+		FileName:  file.FileName,
+		ObjectKey: file.ObjectKey,
+		Success:   true,
+	}
+}
 
-	result := &BatchUploadResponse{
+func buildDownloadResult(path string, url string, err error) BatchDownloadResult {
+	fileName := filepath.Base(path)
+	if err != nil {
+		return BatchDownloadResult{
+			Path:     path,
+			FileName: fileName,
+			Error:    err.Error(),
+			Success:  false,
+		}
+	}
+	return BatchDownloadResult{
+		Path:     path,
+		FileName: fileName,
+		URL:      url,
+		Success:  true,
+	}
+}
+
+// BatchUploadFiles uploads multiple files to S3 concurrently using a worker pool
+func (s *S3) BatchUploadFiles(ctx context.Context, files []FileUploadInput, maxWorkers int) *BatchUploadResponse {
+	if maxWorkers <= 0 {
+		maxWorkers = DefaultMaxWorkers
+	}
+	if maxWorkers > len(files) {
+		maxWorkers = len(files)
+	}
+
+	jobs := make(chan FileUploadInput, len(files))
+	results := make(chan BatchUploadResult, len(files))
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for file := range jobs {
+				select {
+				case <-ctx.Done():
+					results <- BatchUploadResult{
+						FileName: file.FileName,
+						Error:    "upload cancelled",
+						Success:  false,
+					}
+					continue
+				default:
+				}
+
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							results <- BatchUploadResult{
+								FileName: file.FileName,
+								Error:    fmt.Sprintf("panic: %v", r),
+								Success:  false,
+							}
+						}
+					}()
+
+					err := s.UploadFile(file.Reader, file.ObjectKey)
+					results <- buildUploadResult(file, err)
+				}()
+			}
+		}()
+	}
+
+	go func() {
+		for _, file := range files {
+			jobs <- file
+		}
+		close(jobs)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	response := &BatchUploadResponse{
 		Uploaded: []BatchUploadResult{},
 		Failed:   []BatchUploadResult{},
 	}
 
-	for _, file := range files {
-		wg.Add(1)
-		go func(f FileUploadInput) {
-			defer wg.Done()
-
-			err := s.UploadFile(f.Reader, f.ObjectKey)
-
-			mu.Lock()
-			defer mu.Unlock()
-
-			if err != nil {
-				result.Failed = append(result.Failed, BatchUploadResult{
-					FileName: f.FileName,
-					Error:    err.Error(),
-					Success:  false,
-				})
-				result.TotalFailed++
-			} else {
-				result.Uploaded = append(result.Uploaded, BatchUploadResult{
-					FileName:  f.FileName,
-					ObjectKey: f.ObjectKey,
-					Success:   true,
-				})
-				result.TotalUploaded++
-			}
-		}(file)
+	for res := range results {
+		if res.Success {
+			response.Uploaded = append(response.Uploaded, res)
+			response.TotalUploaded++
+		} else {
+			response.Failed = append(response.Failed, res)
+			response.TotalFailed++
+		}
 	}
 
-	wg.Wait()
-	return result
+	return response
 }
 
-// BatchGenerateDownloadLinks generates download URLs for multiple files concurrently
-func (s *S3) BatchGenerateDownloadLinks(paths []string, urlCache *cache.URLCache) *BatchDownloadResponse {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
+// BatchGenerateDownloadLinks generates presigned URLs for multiple files concurrently
+func (s *S3) BatchGenerateDownloadLinks(ctx context.Context, paths []string, urlCache *cache.URLCache, maxWorkers int) *BatchDownloadResponse {
+	if maxWorkers <= 0 {
+		maxWorkers = DefaultMaxWorkers
+	}
+	if maxWorkers > len(paths) {
+		maxWorkers = len(paths)
+	}
 
-	result := &BatchDownloadResponse{
+	jobs := make(chan string, len(paths))
+	results := make(chan BatchDownloadResult, len(paths))
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range jobs {
+				select {
+				case <-ctx.Done():
+					results <- BatchDownloadResult{
+						Path:     path,
+						FileName: filepath.Base(path),
+						Error:    "download cancelled",
+						Success:  false,
+					}
+					continue
+				default:
+				}
+
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							results <- BatchDownloadResult{
+								Path:     path,
+								FileName: filepath.Base(path),
+								Error:    fmt.Sprintf("panic: %v", r),
+								Success:  false,
+							}
+						}
+					}()
+
+					url, err := s.GenerateDownloadLink(path, urlCache)
+					results <- buildDownloadResult(path, url, err)
+				}()
+			}
+		}()
+	}
+
+	go func() {
+		for _, path := range paths {
+			jobs <- path
+		}
+		close(jobs)
+	}()
+
+	// Close results channel after all workers finish
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	response := &BatchDownloadResponse{
 		Files: []BatchDownloadResult{},
 	}
 
-	for _, path := range paths {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-
-			url, err := s.GenerateDownloadLink(p, urlCache)
-			fileName := filepath.Base(p)
-
-			mu.Lock()
-			defer mu.Unlock()
-
-			if err != nil {
-				result.Files = append(result.Files, BatchDownloadResult{
-					Path:     p,
-					FileName: fileName,
-					Error:    err.Error(),
-					Success:  false,
-				})
-				result.TotalFailed++
-			} else {
-				result.Files = append(result.Files, BatchDownloadResult{
-					Path:     p,
-					FileName: fileName,
-					URL:      url,
-					Success:  true,
-				})
-				result.TotalSuccess++
-			}
-		}(path)
+	for res := range results {
+		if res.Success {
+			response.TotalSuccess++
+		} else {
+			response.TotalFailed++
+		}
+		response.Files = append(response.Files, res)
 	}
 
-	wg.Wait()
-	return result
+	return response
 }
 
 // DeleteFolder deletes a folder and its contents recursively from the S3 bucket.

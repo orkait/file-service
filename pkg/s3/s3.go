@@ -4,7 +4,6 @@ import (
 	"context"
 	"file-management-service/config"
 	"file-management-service/pkg/cache"
-	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -16,9 +15,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 )
-
-// Default number of concurrent workers for batch operations
-const DefaultMaxWorkers = 10
 
 // S3 represents the Amazon S3 service.
 type S3 struct {
@@ -306,6 +302,17 @@ func (s *S3) DeleteObject(objectKey string) error {
 	return nil
 }
 
+// BuildObjectKey constructs the S3 object key by combining folder path and filename
+func BuildObjectKey(folderPath, filename string) string {
+	if folderPath == "" {
+		return filename
+	}
+	if strings.HasSuffix(folderPath, "/") {
+		return folderPath + filename
+	}
+	return folderPath + "/" + filename
+}
+
 // buildUploadResult creates a BatchUploadResult from file and error
 func buildUploadResult(file FileUploadInput, err error) BatchUploadResult {
 	if err != nil {
@@ -340,7 +347,27 @@ func buildDownloadResult(path string, url string, err error) BatchDownloadResult
 	}
 }
 
-// BatchUploadFiles uploads multiple files to S3 concurrently using a worker pool
+/*
+BatchUploadFiles uploads multiple files to S3 concurrently using a worker pool pattern.
+
+Internal Working:
+1. Worker Pool Setup: Creates a fixed number of worker goroutines to process uploads concurrently
+2. Channels: Uses two buffered channels:
+  - jobs: feeds FileUploadInput to workers (buffer size = total files)
+  - results: collects BatchUploadResult from workers (buffer size = total files)
+
+3. Workers: Each worker goroutine:
+  - Reads files from jobs channel
+  - Checks for context cancellation (client disconnect)
+  - Uploads to S3 with panic recovery
+  - Sends result to results channel
+
+4. Job Distribution: A separate goroutine pushes all files to jobs channel and closes it
+5. Result Collection: Main goroutine collects results and categorizes them as uploaded/failed
+6. Cleanup: Uses WaitGroup to ensure all workers finish before closing results channel
+
+This pattern provides controlled concurrency, prevents resource exhaustion, and handles failures gracefully.
+*/
 func (s *S3) BatchUploadFiles(ctx context.Context, files []FileUploadInput, maxWorkers int) *BatchUploadResponse {
 	if maxWorkers <= 0 {
 		maxWorkers = DefaultMaxWorkers
@@ -363,7 +390,7 @@ func (s *S3) BatchUploadFiles(ctx context.Context, files []FileUploadInput, maxW
 				case <-ctx.Done():
 					results <- BatchUploadResult{
 						FileName: file.FileName,
-						Error:    "upload cancelled",
+						Error:    ErrorUploadCancelled,
 						Success:  false,
 					}
 					continue
@@ -375,7 +402,7 @@ func (s *S3) BatchUploadFiles(ctx context.Context, files []FileUploadInput, maxW
 						if r := recover(); r != nil {
 							results <- BatchUploadResult{
 								FileName: file.FileName,
-								Error:    fmt.Sprintf("panic: %v", r),
+								Error:    formatPanicError(r),
 								Success:  false,
 							}
 						}
@@ -418,7 +445,27 @@ func (s *S3) BatchUploadFiles(ctx context.Context, files []FileUploadInput, maxW
 	return response
 }
 
-// BatchGenerateDownloadLinks generates presigned URLs for multiple files concurrently
+/*
+BatchGenerateDownloadLinks generates presigned URLs for multiple files concurrently using a worker pool pattern.
+
+Internal Working:
+1. Worker Pool Setup: Creates a fixed number of worker goroutines to generate URLs concurrently
+2. Channels: Uses two buffered channels:
+  - jobs: feeds file paths (strings) to workers (buffer size = total paths)
+  - results: collects BatchDownloadResult from workers (buffer size = total paths)
+
+3. Workers: Each worker goroutine:
+  - Reads paths from jobs channel
+  - Checks for context cancellation (client disconnect)
+  - Generates presigned URL with panic recovery and cache support
+  - Sends result to results channel
+
+4. Job Distribution: A separate goroutine pushes all paths to jobs channel and closes it
+5. Result Collection: Main goroutine collects all results into a single response
+6. Cleanup: Uses WaitGroup to ensure all workers finish before closing results channel
+
+This pattern provides controlled concurrency and leverages URL caching for better performance.
+*/
 func (s *S3) BatchGenerateDownloadLinks(ctx context.Context, paths []string, urlCache *cache.URLCache, maxWorkers int) *BatchDownloadResponse {
 	if maxWorkers <= 0 {
 		maxWorkers = DefaultMaxWorkers
@@ -442,7 +489,7 @@ func (s *S3) BatchGenerateDownloadLinks(ctx context.Context, paths []string, url
 					results <- BatchDownloadResult{
 						Path:     path,
 						FileName: filepath.Base(path),
-						Error:    "download cancelled",
+						Error:    ErrorDownloadCancelled,
 						Success:  false,
 					}
 					continue
@@ -455,7 +502,7 @@ func (s *S3) BatchGenerateDownloadLinks(ctx context.Context, paths []string, url
 							results <- BatchDownloadResult{
 								Path:     path,
 								FileName: filepath.Base(path),
-								Error:    fmt.Sprintf("panic: %v", r),
+								Error:    formatPanicError(r),
 								Success:  false,
 							}
 						}

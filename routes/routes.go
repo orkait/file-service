@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/labstack/echo/v4"
 )
@@ -328,10 +327,10 @@ func ping(c echo.Context) error {
 }
 
 // batchUploadFileHandler uploads multiple files to S3 concurrently (max 100 files, 10 workers)
-func batchUploadFileHandler(c echo.Context, config *config.Config) error {
+func batchUploadFileHandler(c echo.Context, cfg *config.Config) error {
 	form, err := c.MultipartForm()
 	if err != nil {
-		response := s3.GetFailureResponse(fmt.Errorf("failed to parse multipart form: %w", err))
+		response := s3.GetFailureResponse(err)
 		return c.JSON(http.StatusBadRequest, response)
 	}
 
@@ -342,18 +341,18 @@ func batchUploadFileHandler(c echo.Context, config *config.Config) error {
 
 	files, ok := form.File["files"]
 	if !ok || len(files) == 0 {
-		response := s3.GetFailureResponse(errors.New("no files provided. Use 'files' as the form-data field name"))
+		response := s3.GetFailureResponse(errors.New(s3.ErrorNoFilesProvided))
 		return c.JSON(http.StatusBadRequest, response)
 	}
 
-	if len(files) > 100 {
-		response := s3.GetFailureResponse(errors.New("maximum 100 files allowed per batch"))
+	if len(files) > s3.MaxBatchSize {
+		response := s3.GetFailureResponse(fmt.Errorf(s3.ErrorMaxBatchExceeded, s3.MaxBatchSize))
 		return c.JSON(http.StatusBadRequest, response)
 	}
 
-	client, err := s3.NewClient(config)
+	client, err := s3.NewClient(cfg)
 	if err != nil {
-		response := s3.GetFailureResponse(fmt.Errorf("failed to create S3 client: %w", err))
+		response := s3.GetFailureResponse(err)
 		return c.JSON(http.StatusInternalServerError, response)
 	}
 
@@ -367,19 +366,10 @@ func batchUploadFileHandler(c echo.Context, config *config.Config) error {
 		}
 		openedFiles = append(openedFiles, src)
 
-		objectKey := file.Filename
-		if folderPath != "" {
-			if strings.HasSuffix(folderPath, "/") {
-				objectKey = folderPath + objectKey
-			} else {
-				objectKey = folderPath + "/" + objectKey
-			}
-		}
-
 		uploadInputs = append(uploadInputs, s3.FileUploadInput{
 			Reader:    src,
 			FileName:  file.Filename,
-			ObjectKey: objectKey,
+			ObjectKey: s3.BuildObjectKey(folderPath, file.Filename),
 		})
 	}
 
@@ -392,7 +382,7 @@ func batchUploadFileHandler(c echo.Context, config *config.Config) error {
 	}
 
 	ctx := c.Request().Context()
-	result := client.BatchUploadFiles(ctx, uploadInputs, 10)
+	result := client.BatchUploadFiles(ctx, uploadInputs, s3.DefaultMaxWorkers)
 
 	// Cleanup file handles
 	for _, f := range openedFiles {
@@ -403,32 +393,32 @@ func batchUploadFileHandler(c echo.Context, config *config.Config) error {
 	return c.JSON(http.StatusOK, response)
 }
 
-// batchDownloadHandler generates presigned download URLs for multiple files (max 100 files, 10 workers)
-func batchDownloadHandler(c echo.Context, config *config.Config, urlCache *cache.URLCache) error {
+// batchDownloadHandler generates presigned download URLs for multiple files
+func batchDownloadHandler(c echo.Context, cfg *config.Config, urlCache *cache.URLCache) error {
 	var req s3.BatchDownloadRequest
 	if err := c.Bind(&req); err != nil {
-		response := s3.GetFailureResponse(errors.New("invalid request body"))
+		response := s3.GetFailureResponse(err)
 		return c.JSON(http.StatusBadRequest, response)
 	}
 
 	if len(req.Paths) == 0 {
-		response := s3.GetFailureResponse(errors.New("no paths provided"))
+		response := s3.GetFailureResponse(errors.New(s3.ErrorNoPathsProvided))
 		return c.JSON(http.StatusBadRequest, response)
 	}
 
-	if len(req.Paths) > 100 {
-		response := s3.GetFailureResponse(errors.New("maximum 100 files allowed per batch"))
+	if len(req.Paths) > s3.MaxBatchSize {
+		response := s3.GetFailureResponse(fmt.Errorf(s3.ErrorMaxBatchExceeded, s3.MaxBatchSize))
 		return c.JSON(http.StatusBadRequest, response)
 	}
 
-	client, err := s3.NewClient(config)
+	client, err := s3.NewClient(cfg)
 	if err != nil {
 		response := s3.GetFailureResponse(fmt.Errorf("failed to create S3 client: %w", err))
 		return c.JSON(http.StatusInternalServerError, response)
 	}
 
 	ctx := c.Request().Context()
-	result := client.BatchGenerateDownloadLinks(ctx, req.Paths, urlCache, 10)
+	result := client.BatchGenerateDownloadLinks(ctx, req.Paths, urlCache, s3.DefaultMaxWorkers)
 
 	response := s3.GetSuccessResponseWithData(result)
 	return c.JSON(http.StatusOK, response)

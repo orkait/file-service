@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -40,6 +41,11 @@ func GetSuccessResponseWithData(data interface{}) SuccessResponse {
 		ResponseCode: http.StatusOK,
 		Data:         data,
 	}
+}
+
+// formatPanicError formats a panic recovery value into a user-friendly error message
+func formatPanicError(r interface{}) string {
+	return fmt.Sprintf("panic: %v", r)
 }
 
 // custom function to sort the files by name or last modified

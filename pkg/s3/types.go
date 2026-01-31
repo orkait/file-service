@@ -44,11 +44,10 @@ type S3UploadPayload struct {
 	FolderPath string `json:"folderPath"`
 }
 
-// FileInfo represents the details of a file or folder
+
 type FileInfo struct {
 	Name     string `json:"name"`
 	IsFolder bool   `json:"isFolder"`
-	// Add more fields as per your requirements
 }
 
 type FilterOptions struct {
@@ -66,7 +65,6 @@ type FilterSizeRange struct {
 	MaxSize int64
 }
 
-// ========== Batch Operations Types ==========
 
 // FileUploadInput represents input for a single file in batch upload
 type FileUploadInput struct {
@@ -75,7 +73,6 @@ type FileUploadInput struct {
 	ObjectKey string
 }
 
-// BatchUploadResult represents result of a single file in batch upload
 type BatchUploadResult struct {
 	FileName  string `json:"fileName"`
 	ObjectKey string `json:"objectKey,omitempty"`
@@ -83,7 +80,6 @@ type BatchUploadResult struct {
 	Success   bool   `json:"success"`
 }
 
-// BatchUploadResponse represents the complete batch upload response
 type BatchUploadResponse struct {
 	Uploaded      []BatchUploadResult `json:"uploaded"`
 	Failed        []BatchUploadResult `json:"failed"`
@@ -91,12 +87,10 @@ type BatchUploadResponse struct {
 	TotalFailed   int                 `json:"totalFailed"`
 }
 
-// BatchDownloadRequest represents the batch download request body
 type BatchDownloadRequest struct {
 	Paths []string `json:"paths"`
 }
 
-// BatchDownloadResult represents result of a single file in batch download
 type BatchDownloadResult struct {
 	Path     string `json:"path"`
 	FileName string `json:"fileName"`
@@ -105,7 +99,6 @@ type BatchDownloadResult struct {
 	Success  bool   `json:"success"`
 }
 
-// BatchDownloadResponse represents the complete batch download response
 type BatchDownloadResponse struct {
 	Files        []BatchDownloadResult `json:"files"`
 	TotalSuccess int                   `json:"totalSuccess"`

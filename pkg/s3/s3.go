@@ -1,10 +1,13 @@
 package s3
 
 import (
+	"context"
 	"file-management-service/config"
 	"file-management-service/pkg/cache"
 	"io"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -297,6 +300,248 @@ func (s *S3) DeleteObject(objectKey string) error {
 	}
 
 	return nil
+}
+
+// BuildObjectKey constructs the S3 object key by combining folder path and filename
+func BuildObjectKey(folderPath, filename string) string {
+	if folderPath == "" {
+		return filename
+	}
+	if strings.HasSuffix(folderPath, "/") {
+		return folderPath + filename
+	}
+	return folderPath + "/" + filename
+}
+
+// buildUploadResult creates a BatchUploadResult from file and error
+func buildUploadResult(file FileUploadInput, err error) BatchUploadResult {
+	if err != nil {
+		return BatchUploadResult{
+			FileName: file.FileName,
+			Error:    err.Error(),
+			Success:  false,
+		}
+	}
+	return BatchUploadResult{
+		FileName:  file.FileName,
+		ObjectKey: file.ObjectKey,
+		Success:   true,
+	}
+}
+
+func buildDownloadResult(path string, url string, err error) BatchDownloadResult {
+	fileName := filepath.Base(path)
+	if err != nil {
+		return BatchDownloadResult{
+			Path:     path,
+			FileName: fileName,
+			Error:    err.Error(),
+			Success:  false,
+		}
+	}
+	return BatchDownloadResult{
+		Path:     path,
+		FileName: fileName,
+		URL:      url,
+		Success:  true,
+	}
+}
+
+/*
+BatchUploadFiles uploads multiple files to S3 concurrently using a worker pool pattern.
+
+Internal Working:
+1. Worker Pool Setup: Creates a fixed number of worker goroutines to process uploads concurrently
+2. Channels: Uses two buffered channels:
+  - jobs: feeds FileUploadInput to workers (buffer size = total files)
+  - results: collects BatchUploadResult from workers (buffer size = total files)
+
+3. Workers: Each worker goroutine:
+  - Reads files from jobs channel
+  - Checks for context cancellation (client disconnect)
+  - Uploads to S3 with panic recovery
+  - Sends result to results channel
+
+4. Job Distribution: A separate goroutine pushes all files to jobs channel and closes it
+5. Result Collection: Main goroutine collects results and categorizes them as uploaded/failed
+6. Cleanup: Uses WaitGroup to ensure all workers finish before closing results channel
+
+This pattern provides controlled concurrency, prevents resource exhaustion, and handles failures gracefully.
+*/
+func (s *S3) BatchUploadFiles(ctx context.Context, files []FileUploadInput, maxWorkers int) *BatchUploadResponse {
+	if maxWorkers <= 0 {
+		maxWorkers = DefaultMaxWorkers
+	}
+	if maxWorkers > len(files) {
+		maxWorkers = len(files)
+	}
+
+	jobs := make(chan FileUploadInput, len(files))
+	results := make(chan BatchUploadResult, len(files))
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for file := range jobs {
+				select {
+				case <-ctx.Done():
+					results <- BatchUploadResult{
+						FileName: file.FileName,
+						Error:    ErrorUploadCancelled,
+						Success:  false,
+					}
+					continue
+				default:
+				}
+
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							results <- BatchUploadResult{
+								FileName: file.FileName,
+								Error:    formatPanicError(r),
+								Success:  false,
+							}
+						}
+					}()
+
+					err := s.UploadFile(file.Reader, file.ObjectKey)
+					results <- buildUploadResult(file, err)
+				}()
+			}
+		}()
+	}
+
+	go func() {
+		for _, file := range files {
+			jobs <- file
+		}
+		close(jobs)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	response := &BatchUploadResponse{
+		Uploaded: []BatchUploadResult{},
+		Failed:   []BatchUploadResult{},
+	}
+
+	for res := range results {
+		if res.Success {
+			response.Uploaded = append(response.Uploaded, res)
+			response.TotalUploaded++
+		} else {
+			response.Failed = append(response.Failed, res)
+			response.TotalFailed++
+		}
+	}
+
+	return response
+}
+
+/*
+BatchGenerateDownloadLinks generates presigned URLs for multiple files concurrently using a worker pool pattern.
+
+Internal Working:
+1. Worker Pool Setup: Creates a fixed number of worker goroutines to generate URLs concurrently
+2. Channels: Uses two buffered channels:
+  - jobs: feeds file paths (strings) to workers (buffer size = total paths)
+  - results: collects BatchDownloadResult from workers (buffer size = total paths)
+
+3. Workers: Each worker goroutine:
+  - Reads paths from jobs channel
+  - Checks for context cancellation (client disconnect)
+  - Generates presigned URL with panic recovery and cache support
+  - Sends result to results channel
+
+4. Job Distribution: A separate goroutine pushes all paths to jobs channel and closes it
+5. Result Collection: Main goroutine collects all results into a single response
+6. Cleanup: Uses WaitGroup to ensure all workers finish before closing results channel
+
+This pattern provides controlled concurrency and leverages URL caching for better performance.
+*/
+func (s *S3) BatchGenerateDownloadLinks(ctx context.Context, paths []string, urlCache *cache.URLCache, maxWorkers int) *BatchDownloadResponse {
+	if maxWorkers <= 0 {
+		maxWorkers = DefaultMaxWorkers
+	}
+	if maxWorkers > len(paths) {
+		maxWorkers = len(paths)
+	}
+
+	jobs := make(chan string, len(paths))
+	results := make(chan BatchDownloadResult, len(paths))
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range jobs {
+				select {
+				case <-ctx.Done():
+					results <- BatchDownloadResult{
+						Path:     path,
+						FileName: filepath.Base(path),
+						Error:    ErrorDownloadCancelled,
+						Success:  false,
+					}
+					continue
+				default:
+				}
+
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							results <- BatchDownloadResult{
+								Path:     path,
+								FileName: filepath.Base(path),
+								Error:    formatPanicError(r),
+								Success:  false,
+							}
+						}
+					}()
+
+					url, err := s.GenerateDownloadLink(path, urlCache)
+					results <- buildDownloadResult(path, url, err)
+				}()
+			}
+		}()
+	}
+
+	go func() {
+		for _, path := range paths {
+			jobs <- path
+		}
+		close(jobs)
+	}()
+
+	// Close results channel after all workers finish
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	response := &BatchDownloadResponse{
+		Files: []BatchDownloadResult{},
+	}
+
+	for res := range results {
+		if res.Success {
+			response.TotalSuccess++
+		} else {
+			response.TotalFailed++
+		}
+		response.Files = append(response.Files, res)
+	}
+
+	return response
 }
 
 // DeleteFolder deletes a folder and its contents recursively from the S3 bucket.

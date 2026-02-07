@@ -2,9 +2,9 @@ package routes
 
 import (
 	"errors"
-	"file-management-service/config"
-	"file-management-service/pkg/cache"
-	"file-management-service/pkg/s3"
+	"file-service/config"
+	"file-service/pkg/cache"
+	"file-service/pkg/s3"
 	"fmt"
 	"mime/multipart"
 	"net/http"

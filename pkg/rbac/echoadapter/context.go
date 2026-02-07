@@ -87,10 +87,11 @@ func SetAuthSubject(c echo.Context, subject *rbac.AuthSubject) {
 	if subject == nil {
 		return
 	}
-	if subject.Type == rbac.AuthTypeJWT {
+	switch subject.Type {
+	case rbac.AuthTypeJWT:
 		c.Set(ContextKeyAuthType, string(rbac.AuthTypeJWT))
 		c.Set(ContextKeyUserRole, string(subject.UserRole))
-	} else if subject.Type == rbac.AuthTypeAPIKey {
+	case rbac.AuthTypeAPIKey:
 		c.Set(ContextKeyAuthType, string(rbac.AuthTypeAPIKey))
 		c.Set(ContextKeyAPIKeyPermissions, subject.Permissions)
 	}

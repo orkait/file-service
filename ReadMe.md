@@ -35,7 +35,7 @@ go mod download
 Create a configuration file named config.json in the project root and populate it with the necessary configuration parameters:
 
 ```js
-BUCKET_NAME=orkait-file-management-service
+BUCKET_NAME=orkait-file-service
 REGION=ap-south-1
 DOWNLOAD_URL_TIME_LIMIT=300
 PAGINATION_PAGE_SIZE=100

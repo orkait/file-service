@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"file-management-service/pkg/rbac"
-	"file-management-service/pkg/rbac/presets"
+	"file-service/pkg/rbac"
+	"file-service/pkg/rbac/presets"
 )
 
 func newChecker(t *testing.T) *rbac.RBACChecker {

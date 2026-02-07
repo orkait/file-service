@@ -1,6 +1,6 @@
 package presets
 
-import "file-management-service/pkg/rbac"
+import "file-service/pkg/rbac"
 
 // E-commerce roles.
 const (
@@ -29,11 +29,11 @@ const (
 
 // E-commerce actions.
 const (
-	EcomActionRead    rbac.Action = "read"
-	EcomActionWrite   rbac.Action = "write"
-	EcomActionDelete  rbac.Action = "delete"
-	EcomActionManage  rbac.Action = "manage"
-	EcomActionRefund  rbac.Action = "refund"
+	EcomActionRead   rbac.Action = "read"
+	EcomActionWrite  rbac.Action = "write"
+	EcomActionDelete rbac.Action = "delete"
+	EcomActionManage rbac.Action = "manage"
+	EcomActionRefund rbac.Action = "refund"
 )
 
 // Ecommerce returns an RBAC configuration for an e-commerce platform.

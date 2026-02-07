@@ -1,8 +1,9 @@
 package echoadapter
 
 import (
+	"file-service/pkg/rbac"
 	"fmt"
-	"file-management-service/pkg/rbac"
+
 	"github.com/labstack/echo/v4"
 )
 

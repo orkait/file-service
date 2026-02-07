@@ -2,8 +2,8 @@ package s3
 
 import (
 	"context"
-	"file-management-service/config"
-	"file-management-service/pkg/cache"
+	"file-service/config"
+	"file-service/pkg/cache"
 	"io"
 	"path/filepath"
 	"strings"

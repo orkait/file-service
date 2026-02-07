@@ -1,9 +1,9 @@
 package main
 
 import (
-	"file-management-service/config"
-	"file-management-service/pkg/cache"
-	"file-management-service/routes"
+	"file-service/config"
+	"file-service/pkg/cache"
+	"file-service/routes"
 	"fmt"
 	"log"
 	"net/http"

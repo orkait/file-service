@@ -6,9 +6,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"file-management-service/pkg/rbac"
-	"file-management-service/pkg/rbac/echoadapter"
-	"file-management-service/pkg/rbac/presets"
+	"file-service/pkg/rbac"
+	"file-service/pkg/rbac/echoadapter"
+	"file-service/pkg/rbac/presets"
+
 	"github.com/labstack/echo/v4"
 )
 

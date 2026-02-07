@@ -3,8 +3,8 @@ package presets_test
 import (
 	"testing"
 
-	"file-management-service/pkg/rbac"
-	"file-management-service/pkg/rbac/presets"
+	"file-service/pkg/rbac"
+	"file-service/pkg/rbac/presets"
 )
 
 // TestAllPresetsAreValid iterates every registered preset and ensures it

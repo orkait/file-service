@@ -1,6 +1,6 @@
 package presets
 
-import "file-management-service/pkg/rbac"
+import "file-service/pkg/rbac"
 
 // Domain constants for the Orka file management service.
 const (

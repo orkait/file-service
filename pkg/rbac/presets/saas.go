@@ -1,6 +1,6 @@
 package presets
 
-import "file-management-service/pkg/rbac"
+import "file-service/pkg/rbac"
 
 // SaaS multi-tenant roles.
 const (

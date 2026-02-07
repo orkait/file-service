@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"file-management-service/pkg/rbac"
-	"file-management-service/pkg/rbac/presets"
+	"file-service/pkg/rbac"
+	"file-service/pkg/rbac/presets"
 )
 
 func validBaseConfig() rbac.Config {

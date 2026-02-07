@@ -1,6 +1,6 @@
 package presets
 
-import "file-management-service/pkg/rbac"
+import "file-service/pkg/rbac"
 
 // CMS roles.
 const (

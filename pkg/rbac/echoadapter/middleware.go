@@ -4,7 +4,8 @@ import (
 	"log"
 	"net/http"
 
-	"file-management-service/pkg/rbac"
+	"file-service/pkg/rbac"
+
 	"github.com/labstack/echo/v4"
 )
 

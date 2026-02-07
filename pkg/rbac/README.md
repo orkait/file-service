@@ -34,9 +34,9 @@ rbac/ (core)  → imports nothing (pure Go + fmt)
 
 ```go
 import (
-    "file-management-service/pkg/rbac"
-    "file-management-service/pkg/rbac/presets"
-    "file-management-service/pkg/rbac/echoadapter"
+    "file-service/pkg/rbac"
+    "file-service/pkg/rbac/presets"
+    "file-service/pkg/rbac/echoadapter"
 )
 
 // Create checker from the file management preset
@@ -98,7 +98,7 @@ func (rc *RBACChecker) ActionToPermission(action Action) Permission
 ### Echo Adapter
 
 ```go
-import "file-management-service/pkg/rbac/echoadapter"
+import "file-service/pkg/rbac/echoadapter"
 
 // Middleware
 func RequireAction(checker, resource, action) echo.MiddlewareFunc

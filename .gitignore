@@ -25,8 +25,4 @@ config/config.json
 
 .env
 .env.local
-internal/rbac/config.go
-internal/rbac/engine.go
-internal/rbac/store.go
-internal/rbac/types.go
-internal/rbac/presets/filemanagement.go
+

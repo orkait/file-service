@@ -1,20 +1,24 @@
-package echoadapter
+package echo
 
 import (
+	"file-service/internal/rbac"
 	"log"
 	"net/http"
-
-	"file-service/pkg/rbac"
 
 	"github.com/labstack/echo/v4"
 )
 
-// RequireAction creates middleware that enforces an action on a resource.
-// Returns 403 Forbidden if the subject cannot perform the action.
-func RequireAction(checker *rbac.RBACChecker, resource rbac.Resource, action rbac.Action) echo.MiddlewareFunc {
+const (
+	ContextKeyAuthType          = "auth_type"
+	ContextKeyUserRole          = "user_role"
+	ContextKeyAPIKeyPermissions = "api_key_permissions"
+)
+
+// RequireAction creates middleware that enforces an action on a resource
+func RequireAction(checker *rbac.Checker, resource rbac.Resource, action rbac.Action) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			subject, err := ExtractAuthSubject(c, checker)
+			subject, err := extractAuthSubject(c, checker)
 			if err != nil {
 				log.Printf("rbac: auth extraction failed: %v", err)
 				return c.JSON(http.StatusUnauthorized, map[string]string{
@@ -34,12 +38,11 @@ func RequireAction(checker *rbac.RBACChecker, resource rbac.Resource, action rba
 	}
 }
 
-// RequireRole creates middleware that enforces a minimum role requirement.
-// Returns 403 Forbidden if the user doesn't have the required role.
-func RequireRole(checker *rbac.RBACChecker, minRole rbac.Role) echo.MiddlewareFunc {
+// RequireRole creates middleware that enforces a minimum role requirement
+func RequireRole(checker *rbac.Checker, minRole rbac.Role) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			subject, err := ExtractAuthSubject(c, checker)
+			subject, err := extractAuthSubject(c, checker)
 			if err != nil {
 				log.Printf("rbac: auth extraction failed: %v", err)
 				return c.JSON(http.StatusUnauthorized, map[string]string{
@@ -59,13 +62,11 @@ func RequireRole(checker *rbac.RBACChecker, minRole rbac.Role) echo.MiddlewareFu
 	}
 }
 
-// RequirePermission creates middleware for permission checks.
-// For API keys it checks the permission directly; for JWT users it maps the
-// permission to a resource/action check on the specified resource.
-func RequirePermission(checker *rbac.RBACChecker, resource rbac.Resource, permission rbac.Permission) echo.MiddlewareFunc {
+// RequirePermission creates middleware for permission checks
+func RequirePermission(checker *rbac.Checker, resource rbac.Resource, permission rbac.Permission) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			subject, err := ExtractAuthSubject(c, checker)
+			subject, err := extractAuthSubject(c, checker)
 			if err != nil {
 				log.Printf("rbac: auth extraction failed: %v", err)
 				return c.JSON(http.StatusUnauthorized, map[string]string{

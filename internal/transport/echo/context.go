@@ -1,27 +1,19 @@
-package echoadapter
+package echo
 
 import (
-	"file-service/pkg/rbac"
+	"file-service/internal/rbac"
 	"fmt"
 
 	"github.com/labstack/echo/v4"
 )
 
-// Context keys used by the authentication middleware.
-const (
-	ContextKeyAuthType          = "auth_type"
-	ContextKeyUserRole          = "user_role"
-	ContextKeyAPIKeyPermissions = "api_key_permissions"
-)
-
-// ExtractAuthSubject builds an AuthSubject from Echo context values.
-// It takes a checker because role validation is config-driven.
-func ExtractAuthSubject(c echo.Context, checker *rbac.RBACChecker) (*rbac.AuthSubject, error) {
-	authType := GetAuthType(c)
+// extractAuthSubject builds an AuthSubject from Echo context values
+func extractAuthSubject(c echo.Context, checker *rbac.Checker) (*rbac.AuthSubject, error) {
+	authType := getAuthType(c)
 
 	switch authType {
 	case rbac.AuthTypeJWT:
-		role, err := GetUserRole(c, checker)
+		role, err := getUserRole(c, checker)
 		if err != nil {
 			return nil, err
 		}
@@ -31,7 +23,7 @@ func ExtractAuthSubject(c echo.Context, checker *rbac.RBACChecker) (*rbac.AuthSu
 		}, nil
 
 	case rbac.AuthTypeAPIKey:
-		permissions, err := GetAPIKeyPermissions(c)
+		permissions, err := getAPIKeyPermissions(c)
 		if err != nil {
 			return nil, err
 		}
@@ -45,8 +37,8 @@ func ExtractAuthSubject(c echo.Context, checker *rbac.RBACChecker) (*rbac.AuthSu
 	}
 }
 
-// GetAuthType determines the authentication method from context.
-func GetAuthType(c echo.Context) rbac.AuthType {
+// getAuthType determines the authentication method from context
+func getAuthType(c echo.Context) rbac.AuthType {
 	authType := c.Get(ContextKeyAuthType)
 	if authType == nil {
 		return ""
@@ -57,8 +49,8 @@ func GetAuthType(c echo.Context) rbac.AuthType {
 	return ""
 }
 
-// GetUserRole extracts and validates the user role from context.
-func GetUserRole(c echo.Context, checker *rbac.RBACChecker) (rbac.Role, error) {
+// getUserRole extracts and validates the user role from context
+func getUserRole(c echo.Context, checker *rbac.Checker) (rbac.Role, error) {
 	userRole := c.Get(ContextKeyUserRole)
 	if userRole == nil {
 		return "", fmt.Errorf("user role not found in context")
@@ -69,8 +61,8 @@ func GetUserRole(c echo.Context, checker *rbac.RBACChecker) (rbac.Role, error) {
 	return "", fmt.Errorf("user role in context is not a string")
 }
 
-// GetAPIKeyPermissions extracts API key permissions from context.
-func GetAPIKeyPermissions(c echo.Context) ([]rbac.Permission, error) {
+// getAPIKeyPermissions extracts API key permissions from context
+func getAPIKeyPermissions(c echo.Context) ([]rbac.Permission, error) {
 	permissions := c.Get(ContextKeyAPIKeyPermissions)
 	if permissions == nil {
 		return nil, fmt.Errorf("API key permissions not found in context")
@@ -81,8 +73,7 @@ func GetAPIKeyPermissions(c echo.Context) ([]rbac.Permission, error) {
 	return nil, fmt.Errorf("API key permissions in context are not []Permission")
 }
 
-// SetAuthSubject stores an AuthSubject in the Echo context.
-// This is a helper for testing and middleware.
+// SetAuthSubject stores an AuthSubject in the Echo context
 func SetAuthSubject(c echo.Context, subject *rbac.AuthSubject) {
 	if subject == nil {
 		return

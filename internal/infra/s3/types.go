@@ -13,60 +13,15 @@ type ObjectDetails struct {
 	DownloadLink string    `json:"downloadLink,omitempty"`
 }
 
-// CreateFolderRequest represents the request body structure for creating a folder
-type CreateFolderRequest struct {
-	FolderName string `json:"folderName"`
-}
-
 type ListFilesResponse struct {
 	Files               *[]ObjectDetails `json:"data"`
-	NextPageToken       string           `json:"nextPageToken,omitempty"` // for pagination purposes only if
-	IsLastPage          bool             `json:"isLastPage,omitempty"`    // for pagination purposes only if
+	NextPageToken       string           `json:"nextPageToken,omitempty"`
+	IsLastPage          bool             `json:"isLastPage,omitempty"`
 	NoOfRecordsReturned int32            `json:"noOfRecordsReturned,omitempty"`
 	FilesCount          int32            `json:"filesCount,omitempty"`
 	FoldersCount        int32            `json:"foldersCount,omitempty"`
 }
 
-type SuccessResponse struct {
-	Status       string      `json:"status"`
-	ResponseCode int         `json:"response_code"`
-	Data         interface{} `json:"data"`
-}
-
-type FailureResponse struct {
-	Status       string `json:"status"`
-	ResponseCode int    `json:"response_code"`
-	ErrorMessage string `json:"error_message"`
-}
-
-type S3UploadPayload struct {
-	Bucket     string `json:"bucket"`
-	FolderPath string `json:"folderPath"`
-}
-
-
-type FileInfo struct {
-	Name     string `json:"name"`
-	IsFolder bool   `json:"isFolder"`
-}
-
-type FilterOptions struct {
-	SizeRange          string
-	TimeRange          string
-	FileTypes          []string
-	FilenameQuery      string
-	FilenameFilterType string
-	FileSize           int64
-	FileSizeFilterType string
-}
-
-type FilterSizeRange struct {
-	MinSize int64
-	MaxSize int64
-}
-
-
-// FileUploadInput represents input for a single file in batch upload
 type FileUploadInput struct {
 	Reader    io.Reader
 	FileName  string
@@ -87,10 +42,6 @@ type BatchUploadResponse struct {
 	TotalFailed   int                 `json:"totalFailed"`
 }
 
-type BatchDownloadRequest struct {
-	Paths []string `json:"paths"`
-}
-
 type BatchDownloadResult struct {
 	Path     string `json:"path"`
 	FileName string `json:"fileName"`
@@ -103,4 +54,23 @@ type BatchDownloadResponse struct {
 	Files        []BatchDownloadResult `json:"files"`
 	TotalSuccess int                   `json:"totalSuccess"`
 	TotalFailed  int                   `json:"totalFailed"`
+}
+
+type BatchDownloadRequest struct {
+	Paths []string `json:"paths"`
+}
+
+type FilterOptions struct {
+	SizeRange          string
+	TimeRange          string
+	FileTypes          []string
+	FilenameQuery      string
+	FilenameFilterType string
+	FileSize           int64
+	FileSizeFilterType string
+}
+
+type FilterSizeRange struct {
+	MinSize int64
+	MaxSize int64
 }

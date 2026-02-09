@@ -2,14 +2,13 @@ root = "."
 
 [tmp]
   path = "./tmp"
-  build_args = ["-mod=vendor"]
 
 [build]
-  bin = "tmp/main"
-  cmd = "go build -o tmp/main ."
+  bin = "tmp/main.exe"
+  cmd = "go build -o tmp/main.exe ./cmd/fileservice"
 
 [run]
-  executable = "tmp/main"
+  executable = "tmp/main.exe"
   args = []
 
 [restart]

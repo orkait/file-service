@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+.github
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Documentation
+*.md
+!ReadMe.md
+
+# Build artifacts
+bin/
+logs/
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Development
+nodemon.json
+Makefile
+
+# Logs
+*.log

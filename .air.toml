@@ -5,7 +5,7 @@ root = "."
 
 [build]
   bin = "tmp/main.exe"
-  cmd = "go build -o tmp/main.exe ./cmd/fileservice"
+  cmd = "go build -o tmp/main.exe ."
 
 [run]
   executable = "tmp/main.exe"

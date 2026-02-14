@@ -1,15 +1,7 @@
 package rbac
 
 import (
-	"errors"
 	"fmt"
-)
-
-var (
-	ErrDenied            = errors.New("authorization denied")
-	ErrNilSubject        = errors.New("subject is nil")
-	ErrInvalidRole       = errors.New("invalid role")
-	ErrInvalidPermission = errors.New("invalid permission")
 )
 
 // Checker provides authorization checking based on a validated Config
@@ -39,7 +31,7 @@ func New(cfg Config) (*Checker, error) {
 func MustNew(cfg Config) *Checker {
 	rc, err := New(cfg)
 	if err != nil {
-		panic(fmt.Sprintf("rbac.MustNew: %v", err))
+		panic(fmt.Sprintf(errMustNewPanicFmt, err))
 	}
 	return rc
 }
@@ -96,7 +88,7 @@ func (rc *Checker) Authorize(subject *AuthSubject, resource Resource, action Act
 	case AuthTypeAPIKey:
 		return rc.authorizeAPIKey(subject.Permissions, resource, action)
 	default:
-		return fmt.Errorf("%w: unknown auth type: %s", ErrDenied, subject.Type)
+		return fmt.Errorf("%w: "+errDeniedUnknownAuthTypeFmt, ErrDenied, subject.Type)
 	}
 }
 
@@ -111,39 +103,39 @@ func (rc *Checker) RequireRole(subject *AuthSubject, minRole Role) error {
 		return fmt.Errorf("%w: %w", ErrDenied, ErrNilSubject)
 	}
 	if subject.Type != AuthTypeJWT {
-		return fmt.Errorf("%w: role check requires JWT authentication", ErrDenied)
+		return fmt.Errorf("%w: "+errDeniedRoleCheckRequiresJWT, ErrDenied)
 	}
 	if !rc.IsRoleElevated(subject.UserRole, minRole) {
-		return fmt.Errorf("%w: requires minimum role '%s', but user has role '%s'", ErrDenied, minRole, subject.UserRole)
+		return fmt.Errorf("%w: "+errDeniedMinRoleRequiredFmt, ErrDenied, minRole, subject.UserRole)
 	}
 	return nil
 }
 
 func (rc *Checker) authorizeUserRole(role Role, resource Resource, action Action) error {
 	if role == "" {
-		return fmt.Errorf("%w: user role is empty", ErrDenied)
+		return fmt.Errorf("%w: "+errDeniedUserRoleEmpty, ErrDenied)
 	}
 	if !rc.canRolePerformAction(role, resource, action) {
-		return fmt.Errorf("%w: role '%s' cannot perform action '%s' on resource '%s'", ErrDenied, role, action, resource)
+		return fmt.Errorf("%w: "+errDeniedRoleCannotPerformActionFmt, ErrDenied, role, action, resource)
 	}
 	return nil
 }
 
 func (rc *Checker) authorizeAPIKey(permissions []Permission, resource Resource, action Action) error {
 	if rc.apiKeyResources == nil {
-		return fmt.Errorf("%w: API key access is not configured", ErrDenied)
+		return fmt.Errorf("%w: "+errDeniedAPIKeyAccessNotConfigured, ErrDenied)
 	}
 	if !rc.apiKeyResources[resource] {
-		return fmt.Errorf("%w: API keys cannot access resource '%s'", ErrDenied, resource)
+		return fmt.Errorf("%w: "+errDeniedAPIKeyResourceNotAllowedFmt, ErrDenied, resource)
 	}
 
 	requiredPermission := rc.ActionToPermission(action)
 	if requiredPermission == "" {
-		return fmt.Errorf("%w: action '%s' is not supported for API keys", ErrDenied, action)
+		return fmt.Errorf("%w: "+errDeniedAPIKeyActionNotSupportedFmt, ErrDenied, action)
 	}
 
 	if !rc.HasPermission(permissions, requiredPermission) {
-		return fmt.Errorf("%w: API key lacks required permission '%s' for action '%s'", ErrDenied, requiredPermission, action)
+		return fmt.Errorf("%w: "+errDeniedAPIKeyPermissionMissingFmt, ErrDenied, requiredPermission, action)
 	}
 
 	return nil
@@ -193,7 +185,7 @@ func (rc *Checker) HasPermission(permissions []Permission, required Permission) 
 // ValidatePermissions validates an array of permissions
 func (rc *Checker) ValidatePermissions(permissions []Permission) error {
 	if len(permissions) == 0 {
-		return fmt.Errorf("%w: permissions array cannot be empty", ErrInvalidPermission)
+		return fmt.Errorf("%w: "+errInvalidPermissionArrayCannotBeEmpty, ErrInvalidPermission)
 	}
 	for _, perm := range permissions {
 		if !rc.validPerms[perm] {

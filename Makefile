@@ -1,10 +1,10 @@
 .PHONY: build start clean test
 
 build:
-	go build -o ./bin/fileservice.exe ./cmd/fileservice
+	go build -o ./bin/fileservice.exe ./main.go
 
 start:
-	nodemon --signal SIGTERM
+	go run main.go
 
 clean:
 	rm -rf ./bin ./tmp

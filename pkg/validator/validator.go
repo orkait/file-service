@@ -214,3 +214,108 @@ func ContentType(contentType string) error {
 
 	return nil
 }
+
+// SanitizeContentType parses and sanitizes a content type, removing potentially dangerous parameters
+func SanitizeContentType(contentType string) (string, error) {
+	if contentType == "" {
+		return "", nil
+	}
+
+	if len(contentType) > maxContentTypeLen {
+		return "", fmt.Errorf(errContentTypeMaxLengthFmt, maxContentTypeLen)
+	}
+
+	// Parse the content type
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", fmt.Errorf(errContentTypeInvalidFmt)
+	}
+
+	// Whitelist of allowed parameters
+	allowedParams := map[string]bool{
+		"charset":  true,
+		"boundary": true, // For multipart
+	}
+
+	// Filter parameters to only allowed ones
+	sanitizedParams := make(map[string]string)
+	for key, value := range params {
+		if allowedParams[key] {
+			// Validate parameter value doesn't contain dangerous characters
+			if isValidParamValue(value) {
+				sanitizedParams[key] = value
+			}
+		}
+	}
+
+	// Reconstruct the content type with sanitized parameters
+	return mime.FormatMediaType(mediaType, sanitizedParams), nil
+}
+
+// isValidParamValue checks if a content-type parameter value is safe
+func isValidParamValue(value string) bool {
+	// Reject values with control characters or suspicious patterns
+	for _, char := range value {
+		if char < asciiControlStart || char == asciiDelete {
+			return false
+		}
+		// Reject semicolons and quotes that could break parsing
+		if char == ';' || char == '"' {
+			return false
+		}
+	}
+	// Reject excessively long values
+	return len(value) <= 100
+}
+
+// ValidateFolderPathSecure validates a folder path with enhanced security checks
+// including normalization and traversal prevention
+func ValidateFolderPathSecure(path string) error {
+	if path == "" {
+		return nil
+	}
+
+	// Normalize the path first
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	normalized = strings.Trim(normalized, "/")
+
+	// Check length after normalization
+	if len(normalized) > maxFolderPathLen {
+		return fmt.Errorf(errFolderPathMaxLengthFmt, maxFolderPathLen)
+	}
+
+	// Check for null bytes (path truncation attack)
+	if strings.Contains(normalized, "\x00") {
+		return fmt.Errorf("folder path cannot contain null bytes")
+	}
+
+	// Check for path traversal after normalization
+	if strings.Contains(normalized, "..") {
+		return fmt.Errorf(errFolderPathTraversalFmt)
+	}
+
+	// Validate each segment
+	segments := strings.Split(normalized, "/")
+	for _, seg := range segments {
+		if seg == "" {
+			return fmt.Errorf(errFolderPathEmptySegFmt)
+		}
+		if seg == "." || seg == ".." {
+			return fmt.Errorf(errFolderPathTraversalFmt)
+		}
+
+		// Check for control characters in each segment
+		for _, char := range seg {
+			if char < asciiControlStart || char == asciiDelete {
+				return fmt.Errorf(errFolderPathControlCharsFmt)
+			}
+		}
+
+		// Check for URL-encoded traversal attempts
+		if strings.Contains(seg, "%2e") || strings.Contains(seg, "%2E") {
+			return fmt.Errorf(errFolderPathTraversalFmt)
+		}
+	}
+
+	return nil
+}

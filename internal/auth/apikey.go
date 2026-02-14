@@ -1,8 +1,6 @@
 package auth
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"file-service/internal/domain/apikey"
 	"file-service/internal/repository"
 	apperrors "file-service/pkg/errors"
@@ -29,9 +27,4 @@ func (s *APIKeyService) ValidatePermissions(key *apikey.APIKey, required apikey.
 	}
 
 	return nil
-}
-
-func HashKey(key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(sum[:])
 }

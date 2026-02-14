@@ -5,18 +5,15 @@ import (
 	"file-service/internal/auth"
 	"file-service/internal/config"
 	"file-service/internal/domain/apikey"
-	"file-service/internal/domain/client"
-	"file-service/internal/domain/project"
-	"file-service/internal/domain/user"
 	"file-service/internal/http/handler"
+	"file-service/internal/http/middleware"
 	"file-service/internal/rbac/presets"
-	"file-service/internal/repository"
-	"file-service/internal/storage/s3"
+	"file-service/internal/repository/postgres"
+	"file-service/internal/types"
 	stdhttp "net/http"
 
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	echomiddleware "github.com/labstack/echo/v4/middleware"
 )
 
 const (
@@ -26,22 +23,21 @@ const (
 )
 
 type ServerDependencies struct {
-	Config *config.Config
-	DB     interface {
-		SignupTransaction(ctx context.Context, email, passwordHash string) (*user.User, *client.Client, *project.Project, error)
-		RollbackSignup(ctx context.Context, clientID uuid.UUID) error
-	}
-	UserRepo       repository.UserRepository
-	ProjectRepo    repository.ProjectRepository
-	FileRepo       repository.FileRepository
-	APIKeyRepo     repository.APIKeyRepository
-	ShareRepo      repository.ShareLinkRepository
-	S3Client       *s3.Client
+	Config         *config.Config
+	DB             types.TransactionManager
+	UserRepo       *postgres.UserRepository
+	ProjectRepo    *postgres.ProjectRepository
+	FileRepo       *postgres.FileRepository
+	APIKeyRepo     *postgres.APIKeyRepository
+	ShareRepo      *postgres.ShareLinkRepository
+	S3Client       types.BucketCreator
 	BucketRegion   string
 	JWTService     *auth.JWTService
 	APIKeyService  *auth.APIKeyService
 	AuthMiddleware *auth.Middleware
 	RBACMiddleware *auth.RBACMiddleware
+	AuditLogger    types.AuditLogger
+	CSRFMiddleware types.CSRFTokenManager
 }
 
 type Server struct {
@@ -54,28 +50,43 @@ func NewServer(deps *ServerDependencies) *Server {
 	e.HideBanner = true
 	e.HidePort = true
 
+	// Set custom HTTP error handler
+	e.HTTPErrorHandler = CustomHTTPErrorHandler
+
 	e.Server.ReadTimeout = deps.Config.Server.ReadTimeout
 	e.Server.WriteTimeout = deps.Config.Server.WriteTimeout
 
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
-	e.Use(middleware.BodyLimit(requestBodyLimit))
-	e.Use(middleware.Secure())
+	// Request ID middleware (first, so all logs have request ID)
+	e.Use(middleware.RequestID())
+	e.Use(middleware.SecurityHeaders()) // Add security headers to all responses
+	e.Use(echomiddleware.Logger())
+	e.Use(echomiddleware.Recover())
+	e.Use(echomiddleware.BodyLimit(requestBodyLimit))
+	// Note: echomiddleware.Secure() removed - SecurityHeaders() provides comprehensive security headers
 
-	authHandler := handler.NewAuthHandler(deps.UserRepo, deps.DB, deps.S3Client, deps.JWTService, deps.BucketRegion)
-	projectHandler := handler.NewProjectHandler(deps.ProjectRepo, deps.UserRepo, deps.S3Client, deps.BucketRegion)
-	fileHandler := handler.NewFileHandler(deps.FileRepo, deps.ProjectRepo, deps.S3Client)
-	apiKeyHandler := handler.NewAPIKeyHandler(deps.APIKeyRepo)
-	shareHandler := handler.NewShareHandler(deps.ShareRepo, deps.FileRepo, deps.ProjectRepo, deps.S3Client)
+	// Global rate limiting
+	globalRateLimiter := middleware.NewGlobalRateLimiter()
+	e.Use(globalRateLimiter.Middleware())
 
-	e.POST("/auth/signup", authHandler.Signup)
-	e.POST("/auth/login", authHandler.Login)
+	// Strict rate limiting for auth endpoints
+	strictRateLimiter := middleware.NewStrictRateLimiter()
+
+	authHandler := handler.NewAuthHandler(deps.UserRepo, deps.DB, deps.S3Client, deps.JWTService, deps.BucketRegion, deps.AuditLogger, deps.CSRFMiddleware)
+	projectHandler := handler.NewProjectHandler(deps.ProjectRepo, deps.ProjectRepo, deps.UserRepo, deps.S3Client, deps.S3Client, deps.BucketRegion, deps.AuditLogger)
+	fileHandler := handler.NewFileHandler(deps.FileRepo, deps.FileRepo, deps.ProjectRepo, deps.S3Client, deps.AuditLogger)
+	apiKeyHandler := handler.NewAPIKeyHandler(deps.APIKeyRepo, deps.AuditLogger)
+	shareHandler := handler.NewShareHandler(deps.ShareRepo, deps.FileRepo, deps.ProjectRepo, deps.S3Client, deps.AuditLogger)
+
+	// Auth endpoints with strict rate limiting
+	e.POST("/auth/signup", authHandler.Signup, strictRateLimiter.Middleware())
+	e.POST("/auth/login", authHandler.Login, strictRateLimiter.Middleware())
 	e.GET("/shares/:token/download-url", shareHandler.GetDownloadURLByShareToken)
 	e.GET("/health", healthCheck)
 
 	api := e.Group("/api")
 	jwtAPI := api.Group("")
 	jwtAPI.Use(deps.AuthMiddleware.RequireJWT())
+	jwtAPI.Use(deps.CSRFMiddleware.Middleware()) // Add CSRF protection for JWT-authenticated requests
 
 	jwtAPI.GET("/projects", projectHandler.ListProjects)
 	jwtAPI.POST("/projects", projectHandler.CreateProject)

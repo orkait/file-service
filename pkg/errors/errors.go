@@ -5,18 +5,25 @@ import (
 	"fmt"
 )
 
-// Domain errors
+// Domain errors - Sentinel errors for use with errors.Is()
 var (
-	ErrNotFound           = errors.New("resource not found")
-	ErrUnauthorized       = errors.New("unauthorized")
-	ErrForbidden          = errors.New("forbidden")
-	ErrBadRequest         = errors.New("bad request")
-	ErrConflict           = errors.New("resource already exists")
-	ErrInternalServer     = errors.New("internal server error")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrExpired            = errors.New("resource expired")
-	ErrRevoked            = errors.New("resource revoked")
-	ErrEmailExists        = errors.New("email already exists")
+	ErrNotFound            = errors.New("resource not found")
+	ErrUnauthorized        = errors.New("unauthorized")
+	ErrForbidden           = errors.New("forbidden")
+	ErrBadRequest          = errors.New("bad request")
+	ErrConflict            = errors.New("resource already exists")
+	ErrInternalServer      = errors.New("internal server error")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
+	ErrExpired             = errors.New("resource expired")
+	ErrRevoked             = errors.New("resource revoked")
+	ErrEmailExists         = errors.New("email already exists")
+	ErrValidation          = errors.New("validation error")
+	ErrInvalidInput        = errors.New("invalid input")
+	ErrAPIKeyRevoked       = errors.New("api key revoked")
+	ErrAPIKeyExpired       = errors.New("api key expired")
+	ErrInsufficientPerms   = errors.New("insufficient permissions")
+	ErrPathTraversal       = errors.New("path traversal attempt detected")
+	ErrFolderDepthExceeded = errors.New("folder depth limit exceeded")
 )
 
 // Custom error type with context

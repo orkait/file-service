@@ -4,8 +4,7 @@ import (
 	"errors"
 	"file-service/internal/auth"
 	"file-service/internal/domain/project"
-	"file-service/internal/repository"
-	"file-service/internal/storage/s3"
+	"file-service/internal/types"
 	apperrors "file-service/pkg/errors"
 	"file-service/pkg/validator"
 	"net/http"
@@ -16,23 +15,32 @@ import (
 )
 
 type ProjectHandler struct {
-	projectRepo  repository.ProjectRepository
-	userRepo     repository.UserRepository
-	s3Client     *s3.Client
-	bucketRegion string
+	projectRepo   ProjectRepository
+	memberRepo    ProjectMemberRepository
+	userRepo      UserGetter
+	s3Client      StorageOperations
+	bucketCreator BucketCreator
+	bucketRegion  string
+	auditLogger   types.AuditLogger
 }
 
 func NewProjectHandler(
-	projectRepo repository.ProjectRepository,
-	userRepo repository.UserRepository,
-	s3Client *s3.Client,
+	projectRepo ProjectRepository,
+	memberRepo ProjectMemberRepository,
+	userRepo UserGetter,
+	s3Client StorageOperations,
+	bucketCreator BucketCreator,
 	bucketRegion string,
+	auditLogger types.AuditLogger,
 ) *ProjectHandler {
 	return &ProjectHandler{
-		projectRepo:  projectRepo,
-		userRepo:     userRepo,
-		s3Client:     s3Client,
-		bucketRegion: bucketRegion,
+		projectRepo:   projectRepo,
+		memberRepo:    memberRepo,
+		userRepo:      userRepo,
+		s3Client:      s3Client,
+		bucketCreator: bucketCreator,
+		bucketRegion:  bucketRegion,
+		auditLogger:   auditLogger,
 	}
 }
 
@@ -72,20 +80,20 @@ func (h *ProjectHandler) CreateProject(c echo.Context) error {
 		return respondError(c, http.StatusInternalServerError, msgCreateProjectFail)
 	}
 
-	if err := h.s3Client.CreateBucket(proj.S3BucketName, h.bucketRegion); err != nil {
+	if err := h.bucketCreator.CreateBucket(c.Request().Context(), proj.S3BucketName, h.bucketRegion); err != nil {
 		if deleteErr := h.projectRepo.Delete(c.Request().Context(), proj.ID); deleteErr != nil {
 			c.Logger().Errorf("Failed to rollback project %s after bucket creation failure: %v", proj.ID, deleteErr)
 		}
 		return respondError(c, http.StatusInternalServerError, msgCreateS3BucketFail)
 	}
 
-	if _, err := h.projectRepo.AddMember(c.Request().Context(), project.AddMemberInput{
+	if _, err := h.memberRepo.AddMember(c.Request().Context(), project.AddMemberInput{
 		ProjectID: proj.ID,
 		UserID:    userID,
 		Role:      project.RoleAdmin,
 		InvitedBy: userID,
 	}); err != nil {
-		if deleteErr := h.s3Client.DeleteBucket(proj.S3BucketName); deleteErr != nil {
+		if deleteErr := h.s3Client.DeleteBucket(c.Request().Context(), proj.S3BucketName); deleteErr != nil {
 			c.Logger().Errorf("Failed to delete bucket %s during rollback: %v", proj.S3BucketName, deleteErr)
 		}
 		if deleteErr := h.projectRepo.Delete(c.Request().Context(), proj.ID); deleteErr != nil {
@@ -113,11 +121,6 @@ func (h *ProjectHandler) ListProjects(c echo.Context) error {
 }
 
 func (h *ProjectHandler) GetProject(c echo.Context) error {
-	clientID, err := auth.GetClientID(c)
-	if err != nil {
-		return respondError(c, http.StatusUnauthorized, err.Error())
-	}
-
 	projectID, err := uuid.Parse(c.Param(paramID))
 	if err != nil {
 		return respondError(c, http.StatusBadRequest, msgInvalidProjectID)
@@ -128,19 +131,13 @@ func (h *ProjectHandler) GetProject(c echo.Context) error {
 		return respondError(c, http.StatusNotFound, msgProjectNotFound)
 	}
 
-	if proj.ClientID != clientID {
-		return respondError(c, http.StatusForbidden, msgAccessDenied)
-	}
+	// Client isolation is enforced by RBAC middleware
+	// which checks project membership before reaching this handler
 
 	return c.JSON(http.StatusOK, proj)
 }
 
 func (h *ProjectHandler) DeleteProject(c echo.Context) error {
-	clientID, err := auth.GetClientID(c)
-	if err != nil {
-		return respondError(c, http.StatusUnauthorized, err.Error())
-	}
-
 	projectID, err := uuid.Parse(c.Param(paramID))
 	if err != nil {
 		return respondError(c, http.StatusBadRequest, msgInvalidProjectID)
@@ -151,21 +148,36 @@ func (h *ProjectHandler) DeleteProject(c echo.Context) error {
 		return respondError(c, http.StatusNotFound, msgProjectNotFound)
 	}
 
-	if proj.ClientID != clientID {
-		return respondError(c, http.StatusForbidden, msgAccessDenied)
-	}
+	// Client isolation is enforced by RBAC middleware
+	// which checks project membership and admin role before reaching this handler
 
-	if err := h.s3Client.DeleteFolder(proj.S3BucketName, ""); err != nil {
+	if err := h.s3Client.DeleteFolder(c.Request().Context(), proj.S3BucketName, ""); err != nil {
 		c.Logger().Errorf("Failed to delete S3 objects in bucket %s: %v", proj.S3BucketName, err)
 	}
 
-	if err := h.s3Client.DeleteBucket(proj.S3BucketName); err != nil {
+	if err := h.s3Client.DeleteBucket(c.Request().Context(), proj.S3BucketName); err != nil {
+		if h.auditLogger != nil {
+			_ = h.auditLogger.LogError(c, "project", &projectID, "delete", err)
+		}
 		return respondError(c, http.StatusInternalServerError, msgDeleteS3BucketFail)
 	}
 
 	if err := h.projectRepo.Delete(c.Request().Context(), projectID); err != nil {
 		c.Logger().Errorf("Failed to delete project %s: %v", projectID, err)
+		if h.auditLogger != nil {
+			_ = h.auditLogger.LogError(c, "project", &projectID, "delete", err)
+		}
 		return respondError(c, http.StatusInternalServerError, msgDeleteProjectFail)
+	}
+
+	// Log successful project deletion
+	if h.auditLogger != nil {
+		metadata := map[string]any{
+			"project_id":   projectID.String(),
+			"project_name": proj.Name,
+			"bucket_name":  proj.S3BucketName,
+		}
+		_ = h.auditLogger.LogFromContext(c, "project", &projectID, "delete", "success", metadata)
 	}
 
 	return respondMessage(c, http.StatusOK, msgProjectDeleted)
@@ -216,7 +228,7 @@ func (h *ProjectHandler) AddMember(c echo.Context) error {
 		return respondError(c, http.StatusForbidden, msgCrossClientMemberDenied)
 	}
 
-	member, err := h.projectRepo.AddMember(c.Request().Context(), project.AddMemberInput{
+	member, err := h.memberRepo.AddMember(c.Request().Context(), project.AddMemberInput{
 		ProjectID: projectID,
 		UserID:    invitee.ID,
 		Role:      role,
@@ -239,7 +251,7 @@ func (h *ProjectHandler) ListMembers(c echo.Context) error {
 		return respondError(c, http.StatusBadRequest, msgInvalidProjectID)
 	}
 
-	members, err := h.projectRepo.GetMembers(c.Request().Context(), projectID)
+	members, err := h.memberRepo.GetMembers(c.Request().Context(), projectID)
 	if err != nil {
 		c.Logger().Errorf("Failed to list members for project %s: %v", projectID, err)
 		return respondError(c, http.StatusInternalServerError, msgListMembersFail)
@@ -280,7 +292,7 @@ func (h *ProjectHandler) UpdateMemberRole(c echo.Context) error {
 		}
 	}
 
-	if err := h.projectRepo.UpdateMemberRole(c.Request().Context(), project.UpdateMemberRoleInput{
+	if err := h.memberRepo.UpdateMemberRole(c.Request().Context(), project.UpdateMemberRoleInput{
 		ProjectID: projectID,
 		UserID:    userID,
 		Role:      role,
@@ -310,7 +322,7 @@ func (h *ProjectHandler) RemoveMember(c echo.Context) error {
 		return err
 	}
 
-	if err := h.projectRepo.RemoveMember(c.Request().Context(), projectID, userID); err != nil {
+	if err := h.memberRepo.RemoveMember(c.Request().Context(), projectID, userID); err != nil {
 		if errors.Is(err, apperrors.ErrNotFound) {
 			return respondError(c, http.StatusNotFound, msgRemoveMemberFail)
 		}
@@ -322,12 +334,12 @@ func (h *ProjectHandler) RemoveMember(c echo.Context) error {
 }
 
 func (h *ProjectHandler) ensureNotLastAdmin(c echo.Context, projectID, userID uuid.UUID) error {
-	member, err := h.projectRepo.GetMember(c.Request().Context(), projectID, userID)
+	member, err := h.memberRepo.GetMember(c.Request().Context(), projectID, userID)
 	if err != nil || member.Role != project.RoleAdmin {
 		return nil
 	}
 
-	adminCount, err := h.projectRepo.CountAdminsByProject(c.Request().Context(), projectID)
+	adminCount, err := h.memberRepo.CountAdminsByProject(c.Request().Context(), projectID)
 	if err != nil {
 		return respondError(c, http.StatusInternalServerError, msgCheckProjectMembersFail)
 	}

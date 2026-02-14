@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"context"
 	"file-service/internal/config"
 	"fmt"
 	"time"
@@ -52,12 +53,13 @@ func NewClient(cfg *config.AWSConfig, presignedURLExpiry time.Duration) (*Client
 	}, nil
 }
 
-func (c *Client) GeneratePresignedUploadURL(bucketName, objectKey string, contentType string) (string, error) {
+func (c *Client) GeneratePresignedUploadURL(ctx context.Context, bucketName, objectKey string, contentType string) (string, error) {
 	req, _ := c.svc.PutObjectRequest(&s3.PutObjectInput{
 		Bucket:      aws.String(bucketName),
 		Key:         aws.String(objectKey),
 		ContentType: aws.String(contentType),
 	})
+	req.SetContext(ctx)
 
 	url, err := req.Presign(c.presignedURLExpiry)
 	if err != nil {
@@ -67,11 +69,12 @@ func (c *Client) GeneratePresignedUploadURL(bucketName, objectKey string, conten
 	return url, nil
 }
 
-func (c *Client) GeneratePresignedDownloadURL(bucketName, objectKey string) (string, error) {
+func (c *Client) GeneratePresignedDownloadURL(ctx context.Context, bucketName, objectKey string) (string, error) {
 	req, _ := c.svc.GetObjectRequest(&s3.GetObjectInput{
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(objectKey),
 	})
+	req.SetContext(ctx)
 
 	url, err := req.Presign(c.presignedURLExpiry)
 	if err != nil {
@@ -81,8 +84,8 @@ func (c *Client) GeneratePresignedDownloadURL(bucketName, objectKey string) (str
 	return url, nil
 }
 
-func (c *Client) DeleteObject(bucketName, objectKey string) error {
-	_, err := c.svc.DeleteObject(&s3.DeleteObjectInput{
+func (c *Client) DeleteObject(ctx context.Context, bucketName, objectKey string) error {
+	_, err := c.svc.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(objectKey),
 	})
@@ -94,7 +97,7 @@ func (c *Client) DeleteObject(bucketName, objectKey string) error {
 	return nil
 }
 
-func (c *Client) CreateBucket(bucketName, region string) error {
+func (c *Client) CreateBucket(ctx context.Context, bucketName, region string) error {
 	input := &s3.CreateBucketInput{
 		Bucket: aws.String(bucketName),
 	}
@@ -105,12 +108,12 @@ func (c *Client) CreateBucket(bucketName, region string) error {
 		}
 	}
 
-	_, err := c.svc.CreateBucket(input)
+	_, err := c.svc.CreateBucketWithContext(ctx, input)
 	if err != nil {
 		return fmt.Errorf(errFailedCreateBucketFmt, err)
 	}
 
-	if err := c.svc.WaitUntilBucketExists(&s3.HeadBucketInput{
+	if err := c.svc.WaitUntilBucketExistsWithContext(ctx, &s3.HeadBucketInput{
 		Bucket: aws.String(bucketName),
 	}); err != nil {
 		return fmt.Errorf(errFailedWaitBucketExistsFmt, err)
@@ -119,8 +122,8 @@ func (c *Client) CreateBucket(bucketName, region string) error {
 	return nil
 }
 
-func (c *Client) DeleteBucket(bucketName string) error {
-	_, err := c.svc.DeleteBucket(&s3.DeleteBucketInput{
+func (c *Client) DeleteBucket(ctx context.Context, bucketName string) error {
+	_, err := c.svc.DeleteBucketWithContext(ctx, &s3.DeleteBucketInput{
 		Bucket: aws.String(bucketName),
 	})
 
@@ -131,14 +134,14 @@ func (c *Client) DeleteBucket(bucketName string) error {
 	return nil
 }
 
-func (c *Client) ListObjects(bucketName, prefix string, maxKeys int) (*s3.ListObjectsV2Output, error) {
+func (c *Client) ListObjects(ctx context.Context, bucketName, prefix string, maxKeys int) (*s3.ListObjectsV2Output, error) {
 	input := &s3.ListObjectsV2Input{
 		Bucket:  aws.String(bucketName),
 		Prefix:  aws.String(prefix),
 		MaxKeys: aws.Int64(int64(maxKeys)),
 	}
 
-	result, err := c.svc.ListObjectsV2(input)
+	result, err := c.svc.ListObjectsV2WithContext(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf(errFailedListObjectsFmt, err)
 	}
@@ -146,8 +149,8 @@ func (c *Client) ListObjects(bucketName, prefix string, maxKeys int) (*s3.ListOb
 	return result, nil
 }
 
-func (c *Client) DeleteFolder(bucketName, prefix string) error {
-	result, err := c.ListObjects(bucketName, prefix, deleteFolderBatchSize)
+func (c *Client) DeleteFolder(ctx context.Context, bucketName, prefix string) error {
+	result, err := c.ListObjects(ctx, bucketName, prefix, deleteFolderBatchSize)
 	if err != nil {
 		return err
 	}
@@ -163,7 +166,7 @@ func (c *Client) DeleteFolder(bucketName, prefix string) error {
 		})
 	}
 
-	_, err = c.svc.DeleteObjects(&s3.DeleteObjectsInput{
+	_, err = c.svc.DeleteObjectsWithContext(ctx, &s3.DeleteObjectsInput{
 		Bucket: aws.String(bucketName),
 		Delete: &s3.Delete{
 			Objects: objectsToDelete,
@@ -176,7 +179,7 @@ func (c *Client) DeleteFolder(bucketName, prefix string) error {
 	}
 
 	if aws.BoolValue(result.IsTruncated) {
-		return c.DeleteFolder(bucketName, prefix)
+		return c.DeleteFolder(ctx, bucketName, prefix)
 	}
 
 	return nil

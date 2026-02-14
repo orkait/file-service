@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"file-service/internal/domain/apikey"
 	"file-service/internal/rbac"
 	"file-service/internal/rbac/presets"
 	"file-service/internal/repository"
@@ -46,10 +47,20 @@ func (m *RBACMiddleware) resolveJWTSubject(c echo.Context, projectID uuid.UUID) 
 func (m *RBACMiddleware) RequireProjectRole(minRole rbac.Role) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if GetAuthType(c) == AuthTypeAPIKey {
+			authType := GetAuthType(c)
+
+			if authType == AuthTypeAPIKey {
+				// For API keys, validate project scope AND permissions BEFORE proceeding
+				if err := m.validateAPIKeyProjectScope(c); err != nil {
+					return err
+				}
+				if err := m.validateAPIKeyPermission(c, minRole); err != nil {
+					return err
+				}
 				return next(c)
 			}
 
+			// For JWT, validate role
 			projectID, err := extractProjectID(c)
 			if err != nil {
 				return respondError(c, http.StatusBadRequest, msgProjectIDRequired)
@@ -69,13 +80,69 @@ func (m *RBACMiddleware) RequireProjectRole(minRole rbac.Role) echo.MiddlewareFu
 	}
 }
 
+// validateAPIKeyProjectScope validates that the API key's project matches the requested project
+// This MUST be called before any data access to prevent information disclosure
+func (m *RBACMiddleware) validateAPIKeyProjectScope(c echo.Context) error {
+	// Get API key's project ID from context (set by auth middleware)
+	keyProjectID, err := GetProjectID(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, msgAPIKeyContextMissing)
+	}
+
+	// Extract requested project ID from route
+	requestedProjectID, err := extractProjectID(c)
+	if err != nil {
+		return respondError(c, http.StatusBadRequest, msgProjectIDRequired)
+	}
+
+	// Validate scope BEFORE handler executes
+	if keyProjectID != requestedProjectID {
+		return respondError(c, http.StatusForbidden, msgAPIKeyScopeDenied)
+	}
+
+	return nil
+}
+
+// validateAPIKeyPermission validates that the API key has the required permission
+// based on the minimum role required for the operation
+func (m *RBACMiddleware) validateAPIKeyPermission(c echo.Context, minRole rbac.Role) error {
+	// Get API key from context
+	keyRaw := c.Get(ContextKeyAPIKey)
+	if keyRaw == nil {
+		return respondError(c, http.StatusUnauthorized, msgAPIKeyContextMissing)
+	}
+
+	key, ok := keyRaw.(*apikey.APIKey)
+	if !ok || key == nil {
+		return respondError(c, http.StatusUnauthorized, msgAPIKeyContextMissing)
+	}
+
+	// Map role to required permission
+	// Viewer = Read, Editor = Write, Admin = Delete (or higher)
+	var requiredPermission apikey.Permission
+	switch minRole {
+	case presets.RoleViewer:
+		requiredPermission = apikey.PermissionRead
+	case presets.RoleEditor:
+		requiredPermission = apikey.PermissionWrite
+	case presets.RoleAdmin:
+		// Admin operations require delete permission
+		requiredPermission = apikey.PermissionDelete
+	default:
+		return respondError(c, http.StatusForbidden, msgAPIKeyPermissionDenied)
+	}
+
+	// Check if API key has the required permission
+	if !key.HasPermission(requiredPermission) {
+		return respondError(c, http.StatusForbidden, msgAPIKeyPermissionDenied)
+	}
+
+	return nil
+}
+
 func (m *RBACMiddleware) RequireProjectRoleForFile(minRole rbac.Role) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if GetAuthType(c) == AuthTypeAPIKey {
-				return next(c)
-			}
-
 			fileIDStr := c.Param(paramID)
 			if fileIDStr == "" {
 				return respondError(c, http.StatusBadRequest, msgFileIDRequired)
@@ -91,6 +158,30 @@ func (m *RBACMiddleware) RequireProjectRoleForFile(minRole rbac.Role) echo.Middl
 				return respondError(c, http.StatusNotFound, msgFileNotFound)
 			}
 
+			authType := GetAuthType(c)
+
+			if authType == AuthTypeAPIKey {
+				// For API keys, validate project scope AND permissions BEFORE proceeding
+				keyProjectID, getErr := GetProjectID(c)
+				if getErr != nil {
+					return respondError(c, http.StatusUnauthorized, msgAPIKeyContextMissing)
+				}
+
+				if file.ProjectID != keyProjectID {
+					// Return same error as not found to prevent enumeration
+					return respondError(c, http.StatusNotFound, msgFileNotFound)
+				}
+
+				// Validate API key has required permission
+				if err := m.validateAPIKeyPermission(c, minRole); err != nil {
+					return respondError(c, http.StatusForbidden, msgAPIKeyPermissionDenied)
+				}
+
+				c.Set(ContextKeyProjectID, file.ProjectID)
+				return next(c)
+			}
+
+			// For JWT, validate role
 			subject, err := m.resolveJWTSubject(c, file.ProjectID)
 			if err != nil {
 				return respondError(c, http.StatusNotFound, msgFileNotFound)

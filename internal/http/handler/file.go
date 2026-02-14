@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"file-service/internal/auth"
-	"file-service/internal/domain/apikey"
 	"file-service/internal/domain/file"
-	"file-service/internal/repository"
 	"file-service/internal/storage/s3"
+	"file-service/internal/types"
 	apperrors "file-service/pkg/errors"
 	"file-service/pkg/validator"
 	"fmt"
@@ -20,16 +19,26 @@ import (
 )
 
 type FileHandler struct {
-	fileRepo    repository.FileRepository
-	projectRepo repository.ProjectRepository
-	s3Client    *s3.Client
+	fileRepo    FileRepository
+	folderRepo  FolderRepository
+	projectRepo ProjectGetter
+	s3Client    StorageOperations
+	auditLogger types.AuditLogger
 }
 
-func NewFileHandler(fileRepo repository.FileRepository, projectRepo repository.ProjectRepository, s3Client *s3.Client) *FileHandler {
+func NewFileHandler(
+	fileRepo FileRepository,
+	folderRepo FolderRepository,
+	projectRepo ProjectGetter,
+	s3Client StorageOperations,
+	auditLogger types.AuditLogger,
+) *FileHandler {
 	return &FileHandler{
 		fileRepo:    fileRepo,
+		folderRepo:  folderRepo,
 		projectRepo: projectRepo,
 		s3Client:    s3Client,
+		auditLogger: auditLogger,
 	}
 }
 
@@ -59,15 +68,19 @@ func (h *FileHandler) GetUploadURL(c echo.Context) error {
 	if err := validator.FileName(req.FileName); err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
-	if err := validator.ContentType(req.ContentType); err != nil {
+
+	// Sanitize content-type to prevent injection attacks
+	sanitizedContentType, err := validator.SanitizeContentType(req.ContentType)
+	if err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
+	req.ContentType = sanitizedContentType
 
 	if err := validator.FileSize(req.SizeBytes); err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
 
-	if err := validator.FolderPath(req.FolderPath); err != nil {
+	if err := validator.ValidateFolderPathSecure(req.FolderPath); err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
 
@@ -80,12 +93,10 @@ func (h *FileHandler) GetUploadURL(c echo.Context) error {
 	if err != nil {
 		return respondError(c, http.StatusNotFound, msgProjectNotFound)
 	}
-	if err := h.ensureAPIKeyProjectScope(c, proj.ID); err != nil {
-		return respondError(c, http.StatusNotFound, msgProjectNotFound)
-	}
+	// API key scope validation is now handled by RBAC middleware
 
 	if req.FolderPath != "" {
-		folder, err := h.fileRepo.GetFolderByPath(c.Request().Context(), projectID, req.FolderPath)
+		folder, err := h.folderRepo.GetFolderByPath(c.Request().Context(), projectID, req.FolderPath)
 		if err != nil || folder.ProjectID != projectID {
 			return respondError(c, http.StatusBadRequest, msgFolderNotFound)
 		}
@@ -93,7 +104,7 @@ func (h *FileHandler) GetUploadURL(c echo.Context) error {
 
 	s3Key := s3.BuildObjectKey(req.FolderPath, req.FileName)
 
-	uploadURL, err := h.s3Client.GeneratePresignedUploadURL(proj.S3BucketName, s3Key, req.ContentType)
+	uploadURL, err := h.s3Client.GeneratePresignedUploadURL(c.Request().Context(), proj.S3BucketName, s3Key, req.ContentType)
 	if err != nil {
 		return respondError(c, http.StatusInternalServerError, msgUploadURLGenerateFail)
 	}
@@ -142,6 +153,20 @@ func (h *FileHandler) GetUploadURL(c echo.Context) error {
 		}
 	}
 
+	// Log presigned URL generation
+	if h.auditLogger != nil {
+		metadata := map[string]any{
+			"file_id":      fileRecord.ID.String(),
+			"project_id":   projectID.String(),
+			"file_name":    req.FileName,
+			"s3_key":       s3Key,
+			"content_type": req.ContentType,
+			"size_bytes":   req.SizeBytes,
+			"operation":    "upload",
+		}
+		_ = h.auditLogger.LogFromContext(c, "file", &fileRecord.ID, "generate_presigned_url", "success", metadata)
+	}
+
 	return c.JSON(http.StatusOK, GetUploadURLResponse{
 		UploadURL: uploadURL,
 		FileID:    fileRecord.ID.String(),
@@ -159,9 +184,7 @@ func (h *FileHandler) GetFile(c echo.Context) error {
 	if err != nil {
 		return respondError(c, http.StatusNotFound, msgFileNotFound)
 	}
-	if err := h.ensureAPIKeyProjectScope(c, fileRecord.ProjectID); err != nil {
-		return respondError(c, http.StatusNotFound, msgFileNotFound)
-	}
+	// API key scope validation is now handled by RBAC middleware
 
 	return c.JSON(http.StatusOK, fileRecord)
 }
@@ -176,18 +199,28 @@ func (h *FileHandler) GetDownloadURL(c echo.Context) error {
 	if err != nil {
 		return respondError(c, http.StatusNotFound, msgFileNotFound)
 	}
-	if err := h.ensureAPIKeyProjectScope(c, fileRecord.ProjectID); err != nil {
-		return respondError(c, http.StatusNotFound, msgFileNotFound)
-	}
+	// API key scope validation is now handled by RBAC middleware
 
 	proj, err := h.projectRepo.GetByID(c.Request().Context(), fileRecord.ProjectID)
 	if err != nil {
 		return respondError(c, http.StatusNotFound, msgProjectNotFound)
 	}
 
-	downloadURL, err := h.s3Client.GeneratePresignedDownloadURL(proj.S3BucketName, fileRecord.S3Key)
+	downloadURL, err := h.s3Client.GeneratePresignedDownloadURL(c.Request().Context(), proj.S3BucketName, fileRecord.S3Key)
 	if err != nil {
 		return respondError(c, http.StatusInternalServerError, msgDownloadURLGenerateFail)
+	}
+
+	// Log presigned URL generation
+	if h.auditLogger != nil {
+		metadata := map[string]any{
+			"file_id":    fileRecord.ID.String(),
+			"project_id": fileRecord.ProjectID.String(),
+			"file_name":  fileRecord.Name,
+			"s3_key":     fileRecord.S3Key,
+			"operation":  "download",
+		}
+		_ = h.auditLogger.LogFromContext(c, "file", &fileRecord.ID, "generate_presigned_url", "success", metadata)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
@@ -201,9 +234,7 @@ func (h *FileHandler) ListFiles(c echo.Context) error {
 	if err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
-	if err := h.ensureAPIKeyProjectScope(c, projectID); err != nil {
-		return respondError(c, http.StatusNotFound, msgProjectNotFound)
-	}
+	// API key scope validation is now handled by RBAC middleware
 
 	limit, offset, err := parsePaginationParams(c, defaultFileListLimit, defaultFileListOffset)
 	if err != nil {
@@ -234,9 +265,7 @@ func (h *FileHandler) DeleteFile(c echo.Context) error {
 	if err != nil {
 		return respondError(c, http.StatusNotFound, msgFileNotFound)
 	}
-	if err := h.ensureAPIKeyProjectScope(c, fileRecord.ProjectID); err != nil {
-		return respondError(c, http.StatusNotFound, msgFileNotFound)
-	}
+	// API key scope validation is now handled by RBAC middleware
 
 	proj, err := h.projectRepo.GetByID(c.Request().Context(), fileRecord.ProjectID)
 	if err != nil {
@@ -245,11 +274,25 @@ func (h *FileHandler) DeleteFile(c echo.Context) error {
 
 	if err := h.fileRepo.Delete(c.Request().Context(), fileID); err != nil {
 		c.Logger().Errorf("Failed to delete file metadata %s: %v", fileID, err)
+		if h.auditLogger != nil {
+			_ = h.auditLogger.LogError(c, "file", &fileID, "delete", err)
+		}
 		return respondError(c, http.StatusInternalServerError, msgDeleteFileFail)
 	}
 
-	if err := h.s3Client.DeleteObject(proj.S3BucketName, fileRecord.S3Key); err != nil {
+	if err := h.s3Client.DeleteObject(c.Request().Context(), proj.S3BucketName, fileRecord.S3Key); err != nil {
 		c.Logger().Errorf("Failed to delete S3 object %s (orphaned): %v", fileRecord.S3Key, err)
+	}
+
+	// Log successful file deletion
+	if h.auditLogger != nil {
+		metadata := map[string]any{
+			"file_id":    fileID.String(),
+			"file_name":  fileRecord.Name,
+			"project_id": fileRecord.ProjectID.String(),
+			"s3_key":     fileRecord.S3Key,
+		}
+		_ = h.auditLogger.LogFromContext(c, "file", &fileID, "delete", "success", metadata)
 	}
 
 	return respondMessage(c, http.StatusOK, msgFileDeleted)
@@ -272,9 +315,7 @@ func (h *FileHandler) CreateFolder(c echo.Context) error {
 	if err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
-	if err := h.ensureAPIKeyProjectScope(c, projectID); err != nil {
-		return respondError(c, http.StatusNotFound, msgProjectNotFound)
-	}
+	// API key scope validation is now handled by RBAC middleware
 
 	if err := validator.FolderName(req.Name); err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
@@ -289,7 +330,7 @@ func (h *FileHandler) CreateFolder(c echo.Context) error {
 		}
 		parentFolderID = &parentID
 
-		parentFolder, err := h.fileRepo.GetFolder(c.Request().Context(), parentID)
+		parentFolder, err := h.folderRepo.GetFolder(c.Request().Context(), parentID)
 		if err != nil {
 			return respondError(c, http.StatusNotFound, msgFolderNotFound)
 		}
@@ -304,7 +345,7 @@ func (h *FileHandler) CreateFolder(c echo.Context) error {
 	}
 
 	normalizedPrefix := buildChildFolderPrefix(parentPrefix, req.Name)
-	if err := validator.FolderPath(normalizedPrefix); err != nil {
+	if err := validator.ValidateFolderPathSecure(normalizedPrefix); err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
 
@@ -317,7 +358,7 @@ func (h *FileHandler) CreateFolder(c echo.Context) error {
 		createdBy = &userID
 	}
 
-	folder, err := h.fileRepo.CreateFolder(c.Request().Context(), file.CreateFolderInput{
+	folder, err := h.folderRepo.CreateFolder(c.Request().Context(), file.CreateFolderInput{
 		ProjectID:      projectID,
 		ParentFolderID: parentFolderID,
 		Name:           req.Name,
@@ -340,9 +381,7 @@ func (h *FileHandler) ListFolders(c echo.Context) error {
 	if err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
-	if err := h.ensureAPIKeyProjectScope(c, projectID); err != nil {
-		return respondError(c, http.StatusNotFound, msgProjectNotFound)
-	}
+	// API key scope validation is now handled by RBAC middleware
 
 	var parentFolderID *uuid.UUID
 	if parentIDRaw := c.QueryParam(queryParentID); parentIDRaw != "" {
@@ -353,7 +392,7 @@ func (h *FileHandler) ListFolders(c echo.Context) error {
 		parentFolderID = &parentID
 	}
 
-	folders, err := h.fileRepo.ListFolders(c.Request().Context(), projectID, parentFolderID)
+	folders, err := h.folderRepo.ListFolders(c.Request().Context(), projectID, parentFolderID)
 	if err != nil {
 		c.Logger().Errorf("Failed to list folders for project %s: %v", projectID, err)
 		return respondError(c, http.StatusInternalServerError, msgListFoldersFail)
@@ -368,7 +407,7 @@ func (h *FileHandler) DeleteFolder(c echo.Context) error {
 		return respondError(c, http.StatusBadRequest, msgInvalidFolderID)
 	}
 
-	folder, err := h.fileRepo.GetFolder(c.Request().Context(), folderID)
+	folder, err := h.folderRepo.GetFolder(c.Request().Context(), folderID)
 	if err != nil {
 		return respondError(c, http.StatusNotFound, msgFolderNotFound)
 	}
@@ -383,9 +422,7 @@ func (h *FileHandler) DeleteFolder(c echo.Context) error {
 		}
 	}
 
-	if err := h.ensureAPIKeyProjectScope(c, folder.ProjectID); err != nil {
-		return respondError(c, http.StatusNotFound, msgFolderNotFound)
-	}
+	// API key scope validation is now handled by RBAC middleware
 
 	proj, err := h.projectRepo.GetByID(c.Request().Context(), folder.ProjectID)
 	if err != nil {
@@ -399,7 +436,7 @@ func (h *FileHandler) DeleteFolder(c echo.Context) error {
 	}
 
 	for _, prefix := range prefixes {
-		if err := h.deleteFolderPrefixObjects(proj.S3BucketName, prefix); err != nil {
+		if err := h.deleteFolderPrefixObjects(c.Request().Context(), proj.S3BucketName, prefix); err != nil {
 			return respondError(c, http.StatusInternalServerError, msgDeleteFolderObjectsFail)
 		}
 	}
@@ -410,7 +447,7 @@ func (h *FileHandler) DeleteFolder(c echo.Context) error {
 		}
 	}
 
-	if err := h.fileRepo.DeleteFolder(c.Request().Context(), folderID); err != nil {
+	if err := h.folderRepo.DeleteFolder(c.Request().Context(), folderID); err != nil {
 		c.Logger().Errorf("Failed to delete folder %s: %v", folderID, err)
 		return respondError(c, http.StatusInternalServerError, msgDeleteFolderFail)
 	}
@@ -438,7 +475,7 @@ func (h *FileHandler) collectFolderDeletionPrefixes(ctx context.Context, project
 		currentID := queue[0]
 		queue = queue[1:]
 
-		children, err := h.fileRepo.ListFolders(ctx, projectID, &currentID)
+		children, err := h.folderRepo.ListFolders(ctx, projectID, &currentID)
 		if err != nil {
 			return nil, fmt.Errorf(msgChildFolderListFail, err)
 		}
@@ -465,11 +502,11 @@ func (h *FileHandler) collectFolderDeletionPrefixes(ctx context.Context, project
 	return prefixes, nil
 }
 
-func (h *FileHandler) deleteFolderPrefixObjects(bucketName, prefix string) error {
-	if err := h.s3Client.DeleteFolder(bucketName, prefix+"/"); err != nil {
+func (h *FileHandler) deleteFolderPrefixObjects(ctx context.Context, bucketName, prefix string) error {
+	if err := h.s3Client.DeleteFolder(ctx, bucketName, prefix+"/"); err != nil {
 		return err
 	}
-	if err := h.s3Client.DeleteObject(bucketName, prefix); err != nil {
+	if err := h.s3Client.DeleteObject(ctx, bucketName, prefix); err != nil {
 		return err
 	}
 
@@ -483,7 +520,7 @@ func (h *FileHandler) verifyFolderDeletion(
 	folderID uuid.UUID,
 	prefixes []string,
 ) error {
-	if _, err := h.fileRepo.GetFolder(ctx, folderID); err == nil {
+	if _, err := h.folderRepo.GetFolder(ctx, folderID); err == nil {
 		return folderDeletionVerificationError(msgFolderMetadataStillExist)
 	} else if !errors.Is(err, apperrors.ErrNotFound) {
 		return folderDeletionVerificationError(msgVerifyMetadataRemoval, err)
@@ -498,7 +535,7 @@ func (h *FileHandler) verifyFolderDeletion(
 			return folderDeletionVerificationError(msgRowsRemainForPrefix, remainingRows, prefix)
 		}
 
-		objects, err := h.s3Client.ListObjects(bucketName, prefix+"/", verificationListObjectLimit)
+		objects, err := h.s3Client.ListObjects(ctx, bucketName, prefix+"/", verificationListObjectLimit)
 		if err != nil {
 			return folderDeletionVerificationError(msgVerifyS3Cleanup, err)
 		}
@@ -575,23 +612,6 @@ func (h *FileHandler) resolveProjectID(c echo.Context, requestedProjectID string
 	return uuid.Nil, echo.NewHTTPError(http.StatusBadRequest, msgProjectIDRequired)
 }
 
-func (h *FileHandler) ensureAPIKeyProjectScope(c echo.Context, projectID uuid.UUID) error {
-	if auth.GetAuthType(c) != auth.AuthTypeAPIKey {
-		return nil
-	}
-
-	keyRaw := c.Get(auth.ContextKeyAPIKey)
-	key, ok := keyRaw.(*apikey.APIKey)
-	if !ok || key == nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, msgAPIKeyContextMissing)
-	}
-	if key.ProjectID != projectID {
-		return echo.NewHTTPError(http.StatusForbidden, msgAPIKeyScopeDenied)
-	}
-
-	return nil
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {
@@ -613,7 +633,7 @@ func (h *FileHandler) validateFolderDepth(ctx context.Context, parentID *uuid.UU
 	currentID := parentID
 
 	for currentID != nil && depth < maxFolderDepth {
-		folder, err := h.fileRepo.GetFolder(ctx, *currentID)
+		folder, err := h.folderRepo.GetFolder(ctx, *currentID)
 		if err != nil {
 			return fmt.Errorf(msgFolderNotFound)
 		}

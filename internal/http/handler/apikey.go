@@ -3,7 +3,7 @@ package handler
 import (
 	"file-service/internal/auth"
 	"file-service/internal/domain/apikey"
-	"file-service/internal/repository"
+	"file-service/internal/types"
 	"file-service/pkg/token"
 	"file-service/pkg/validator"
 	"net/http"
@@ -15,12 +15,14 @@ import (
 )
 
 type APIKeyHandler struct {
-	apiKeyRepo repository.APIKeyRepository
+	apiKeyRepo  APIKeyRepository
+	auditLogger types.AuditLogger
 }
 
-func NewAPIKeyHandler(apiKeyRepo repository.APIKeyRepository) *APIKeyHandler {
+func NewAPIKeyHandler(apiKeyRepo APIKeyRepository, auditLogger types.AuditLogger) *APIKeyHandler {
 	return &APIKeyHandler{
-		apiKeyRepo: apiKeyRepo,
+		apiKeyRepo:  apiKeyRepo,
+		auditLogger: auditLogger,
 	}
 }
 
@@ -64,7 +66,7 @@ func (h *APIKeyHandler) CreateAPIKey(c echo.Context) error {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 
-	if err := validator.APIKeyName(req.Name); err != nil {
+	if err = validator.APIKeyName(req.Name); err != nil {
 		return respondError(c, http.StatusBadRequest, err.Error())
 	}
 	if len(req.Permissions) == 0 {
@@ -83,7 +85,7 @@ func (h *APIKeyHandler) CreateAPIKey(c echo.Context) error {
 		}
 		seen[permission] = struct{}{}
 		perm := apikey.Permission(permission)
-		if err := perm.Validate(); err != nil {
+		if err = perm.Validate(); err != nil {
 			return respondError(c, http.StatusBadRequest, err.Error())
 		}
 		permissions = append(permissions, perm)
@@ -107,7 +109,22 @@ func (h *APIKeyHandler) CreateAPIKey(c echo.Context) error {
 		CreatedBy:   userID,
 	})
 	if err != nil {
+		if h.auditLogger != nil {
+			_ = h.auditLogger.LogError(c, "api_key", nil, "create", err)
+		}
 		return respondError(c, http.StatusInternalServerError, msgCreateAPIKeyFail)
+	}
+
+	// Log successful API key creation
+	if h.auditLogger != nil {
+		metadata := map[string]any{
+			"api_key_id":  keyRecord.ID.String(),
+			"project_id":  projectID.String(),
+			"name":        req.Name,
+			"permissions": req.Permissions,
+			"key_prefix":  keyPrefix,
+		}
+		_ = h.auditLogger.LogFromContext(c, "api_key", &keyRecord.ID, "create", "success", metadata)
 	}
 
 	return c.JSON(http.StatusCreated, CreateAPIKeyResponse{
@@ -163,7 +180,20 @@ func (h *APIKeyHandler) RevokeAPIKey(c echo.Context) error {
 		ID:        keyID,
 		RevokedBy: userID,
 	}); err != nil {
+		if h.auditLogger != nil {
+			_ = h.auditLogger.LogError(c, "api_key", &keyID, "revoke", err)
+		}
 		return respondError(c, http.StatusInternalServerError, msgRevokeAPIKeyFail)
+	}
+
+	// Log successful API key revocation
+	if h.auditLogger != nil {
+		metadata := map[string]any{
+			"api_key_id": keyID.String(),
+			"project_id": projectID.String(),
+			"name":       keyRecord.Name,
+		}
+		_ = h.auditLogger.LogFromContext(c, "api_key", &keyID, "revoke", "success", metadata)
 	}
 
 	return respondMessage(c, http.StatusOK, msgAPIKeyRevoked)

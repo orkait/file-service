@@ -146,39 +146,107 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	var errs []error
+
+	// Server validation
 	if c.Server.Port == "" {
-		return fmt.Errorf(errPortRequiredFmt)
+		errs = append(errs, fmt.Errorf("PORT must be set"))
+	}
+	if c.Server.ReadTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("SERVER_READ_TIMEOUT must be positive"))
+	}
+	if c.Server.WriteTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("SERVER_WRITE_TIMEOUT must be positive"))
+	}
+	if c.Server.ShutdownTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("SERVER_SHUTDOWN_TIMEOUT must be positive"))
 	}
 
+	// Database validation
 	if c.Database.Password == "" {
-		return fmt.Errorf(errDBPasswordRequiredFmt)
+		errs = append(errs, fmt.Errorf("DB_PASSWORD must be set"))
+	}
+	if c.Database.Host == "" {
+		errs = append(errs, fmt.Errorf("DB_HOST must be set"))
+	}
+	if c.Database.Port <= 0 || c.Database.Port > 65535 {
+		errs = append(errs, fmt.Errorf("DB_PORT must be between 1 and 65535"))
+	}
+	if c.Database.Database == "" {
+		errs = append(errs, fmt.Errorf("DB_NAME must be set"))
+	}
+	if c.Database.User == "" {
+		errs = append(errs, fmt.Errorf("DB_USER must be set"))
+	}
+	if c.Database.MaxConns <= 0 {
+		errs = append(errs, fmt.Errorf("DB_MAX_CONNS must be positive"))
+	}
+	if c.Database.MinConns < 0 {
+		errs = append(errs, fmt.Errorf("DB_MIN_CONNS must be non-negative"))
+	}
+	if c.Database.MinConns > c.Database.MaxConns {
+		errs = append(errs, fmt.Errorf("DB_MIN_CONNS cannot exceed DB_MAX_CONNS"))
 	}
 
+	// AWS validation
 	if c.AWS.Region == "" {
-		return fmt.Errorf(errRegionRequiredFmt)
+		errs = append(errs, fmt.Errorf("REGION must be set"))
 	}
-
 	if c.AWS.AccessKeyID == "" {
-		return fmt.Errorf(errAWSAccessKeyRequiredFmt)
+		errs = append(errs, fmt.Errorf("AWS_ACCESS_KEY_ID must be set"))
 	}
-
 	if c.AWS.SecretAccessKey == "" {
-		return fmt.Errorf(errAWSSecretKeyRequiredFmt)
+		errs = append(errs, fmt.Errorf("AWS_SECRET_ACCESS_KEY must be set"))
 	}
 
+	// JWT validation (security-sensitive)
 	if c.JWT.Secret == "" {
-		return fmt.Errorf(errJWTSecretRequiredFmt)
+		errs = append(errs, fmt.Errorf("JWT_SECRET must be set"))
+	} else {
+		if len(c.JWT.Secret) < minJWTSecretLength {
+			errs = append(errs, fmt.Errorf("JWT_SECRET must be at least %d characters", minJWTSecretLength))
+		}
+		if !hasMinimumEntropy(c.JWT.Secret) {
+			errs = append(errs, fmt.Errorf("JWT_SECRET has insufficient entropy (appears non-random). Use a cryptographically secure random string"))
+		}
+	}
+	if c.JWT.ExpiryDuration <= 0 {
+		errs = append(errs, fmt.Errorf("JWT_EXPIRY_MINUTES must be positive"))
 	}
 
-	if len(c.JWT.Secret) < minJWTSecretLength {
-		return fmt.Errorf(errJWTSecretMinLengthFmt, minJWTSecretLength)
+	// App validation
+	if c.App.PresignedURLExpiry <= 0 {
+		errs = append(errs, fmt.Errorf("DOWNLOAD_URL_TIME_LIMIT must be positive"))
+	}
+	if c.App.PageSize <= 0 {
+		errs = append(errs, fmt.Errorf("PAGINATION_PAGE_SIZE must be positive"))
+	}
+	if c.App.MaxUploadSize <= 0 {
+		errs = append(errs, fmt.Errorf("MAX_UPLOAD_SIZE must be positive"))
 	}
 
-	if !hasMinimumEntropy(c.JWT.Secret) {
-		return fmt.Errorf(errJWTSecretLowEntropyFmt)
+	// Return all errors joined
+	if len(errs) > 0 {
+		return fmt.Errorf("configuration validation failed: %w", joinErrors(errs))
 	}
 
 	return nil
+}
+
+// joinErrors combines multiple errors into a single error
+func joinErrors(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	if len(errs) == 1 {
+		return errs[0]
+	}
+
+	msg := errs[0].Error()
+	for i := 1; i < len(errs); i++ {
+		msg += "; " + errs[i].Error()
+	}
+	return fmt.Errorf("%s", msg)
 }
 
 func hasMinimumEntropy(secret string) bool {
@@ -223,7 +291,7 @@ func getEnv(key, defaultValue string) string {
 func requireEnv(key string) string {
 	value := os.Getenv(key)
 	if value == "" {
-		panic(messages.requiredEnvNotSet(key))
+		panic(fmt.Sprintf("required environment variable %s is not set", key))
 	}
 	return value
 }

@@ -3,8 +3,7 @@ package handler
 import (
 	"file-service/internal/auth"
 	"file-service/internal/domain/share"
-	"file-service/internal/repository"
-	"file-service/internal/storage/s3"
+	"file-service/internal/types"
 	"file-service/pkg/token"
 	"net/http"
 	"regexp"
@@ -21,23 +20,26 @@ const (
 var shareTokenPattern = regexp.MustCompile("^[a-f0-9]{64}$")
 
 type ShareHandler struct {
-	shareRepo   repository.ShareLinkRepository
-	fileRepo    repository.FileRepository
-	projectRepo repository.ProjectRepository
-	s3Client    *s3.Client
+	shareRepo   ShareRepository
+	fileRepo    FileGetter
+	projectRepo ProjectGetter
+	s3Client    StorageOperations
+	auditLogger types.AuditLogger
 }
 
 func NewShareHandler(
-	shareRepo repository.ShareLinkRepository,
-	fileRepo repository.FileRepository,
-	projectRepo repository.ProjectRepository,
-	s3Client *s3.Client,
+	shareRepo ShareRepository,
+	fileRepo FileGetter,
+	projectRepo ProjectGetter,
+	s3Client StorageOperations,
+	auditLogger types.AuditLogger,
 ) *ShareHandler {
 	return &ShareHandler{
 		shareRepo:   shareRepo,
 		fileRepo:    fileRepo,
 		projectRepo: projectRepo,
 		s3Client:    s3Client,
+		auditLogger: auditLogger,
 	}
 }
 
@@ -81,14 +83,29 @@ func (h *ShareHandler) CreateShareLink(c echo.Context) error {
 
 func (h *ShareHandler) GetDownloadURLByShareToken(c echo.Context) error {
 	shareToken := c.Param(paramToken)
-	if !isValidShareToken(shareToken) {
+
+	// Fast format validation (non-timing sensitive)
+	if !isValidShareTokenFormat(shareToken) {
 		return respondError(c, http.StatusBadRequest, msgInvalidShareToken)
 	}
 
-	link, err := h.shareRepo.GetByToken(c.Request().Context(), auth.HashKey(shareToken))
+	// Hash the token
+	hashedToken := auth.HashKey(shareToken)
+
+	// Fetch from database
+	link, err := h.shareRepo.GetByToken(c.Request().Context(), hashedToken)
 	if err != nil {
+		// Perform constant-time dummy operation to prevent timing oracle
+		auth.ConstantTimeCompareHashes(hashedToken, auth.DummyShareTokenHash())
 		return respondError(c, http.StatusNotFound, msgShareLinkNotFound)
 	}
+
+	// Verify token matches (defense in depth) using constant-time comparison
+	if !auth.ConstantTimeCompareHashes(link.Token, hashedToken) {
+		return respondError(c, http.StatusNotFound, msgShareLinkNotFound)
+	}
+
+	// Check expiry
 	if time.Since(link.CreatedAt) > shareLinkTTL {
 		return respondError(c, http.StatusGone, msgShareTokenExpired)
 	}
@@ -103,9 +120,20 @@ func (h *ShareHandler) GetDownloadURLByShareToken(c echo.Context) error {
 		return respondError(c, http.StatusNotFound, msgProjectNotFound)
 	}
 
-	downloadURL, err := h.s3Client.GeneratePresignedDownloadURL(proj.S3BucketName, fileRecord.S3Key)
+	downloadURL, err := h.s3Client.GeneratePresignedDownloadURL(c.Request().Context(), proj.S3BucketName, fileRecord.S3Key)
 	if err != nil {
 		return respondError(c, http.StatusInternalServerError, msgDownloadURLGenerateFail)
+	}
+
+	// Log share link access
+	if h.auditLogger != nil {
+		metadata := map[string]any{
+			"share_token": shareToken[:8] + "...", // Log only prefix for security
+			"file_id":     fileRecord.ID.String(),
+			"file_name":   fileRecord.Name,
+			"ip_address":  c.RealIP(),
+		}
+		_ = h.auditLogger.LogFromContext(c, "share_link", &link.ID, "access", "success", metadata)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
@@ -126,10 +154,9 @@ func publicShareURL(token string) string {
 	return "/shares/" + token + "/download-url"
 }
 
-func isValidShareToken(token string) bool {
+func isValidShareTokenFormat(token string) bool {
 	if len(token) != shareTokenLength {
 		return false
 	}
-
 	return shareTokenPattern.MatchString(token)
 }

@@ -35,6 +35,8 @@ const (
 	msgAPIKeyRevoked           = "API key has been revoked"
 	msgAPIKeyExpired           = "API key has expired"
 	msgAPIKeyPermissionDenied  = "API key lacks required permission"
+	msgAPIKeyContextMissing    = "API key context missing"
+	msgAPIKeyScopeDenied       = "API key cannot access another project"
 	msgClientNotFound          = "client not found"
 	msgProjectNotFound         = "project not found"
 	msgInvalidUserIDCtx        = "invalid user ID in context"

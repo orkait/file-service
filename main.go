@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"file-service/internal/audit"
 	"file-service/internal/auth"
 	"file-service/internal/config"
 	"file-service/internal/http"
+	"file-service/internal/http/middleware"
 	"file-service/internal/repository/postgres"
 	"file-service/internal/storage/s3"
 	"log"
@@ -12,7 +14,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/labstack/echo/v4"
 )
 
 const (
@@ -42,6 +46,10 @@ func main() {
 
 	log.Println("Configuration loaded successfully")
 
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	db, err := postgres.New(&cfg.Database)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -67,6 +75,12 @@ func main() {
 	apiKeyService := auth.NewAPIKeyService(apiKeyRepo)
 	authMiddleware := auth.NewMiddleware(jwtService, apiKeyService, apiKeyRepo)
 	rbacMiddleware := auth.NewRBACMiddleware(projectRepo, fileRepo)
+	csrfMiddleware := middleware.NewCSRFMiddleware(ctx)
+	defer csrfMiddleware.Stop()
+
+	// Create audit logger with adapter
+	auditLoggerImpl := audit.NewLogger(db.Pool)
+	auditLogger := &auditLoggerAdapter{logger: auditLoggerImpl}
 
 	serverDeps := &http.ServerDependencies{
 		Config:         cfg,
@@ -82,6 +96,8 @@ func main() {
 		APIKeyService:  apiKeyService,
 		AuthMiddleware: authMiddleware,
 		RBACMiddleware: rbacMiddleware,
+		AuditLogger:    auditLogger,
+		CSRFMiddleware: csrfMiddleware,
 	}
 
 	server := http.NewServer(serverDeps)
@@ -99,12 +115,28 @@ func main() {
 
 	log.Println("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
-	defer cancel()
+	// Cancel context to stop background tasks
+	cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer shutdownCancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
 	log.Println("Server exited gracefully")
+}
+
+// auditLoggerAdapter adapts audit.Logger to types.AuditLogger interface
+type auditLoggerAdapter struct {
+	logger *audit.Logger
+}
+
+func (a *auditLoggerAdapter) LogFromContext(c echo.Context, resourceType string, resourceID *uuid.UUID, action string, status string, metadata map[string]any) error {
+	return a.logger.LogFromContext(c, audit.ResourceType(resourceType), resourceID, audit.Action(action), audit.Status(status), metadata)
+}
+
+func (a *auditLoggerAdapter) LogError(c echo.Context, resourceType string, resourceID *uuid.UUID, action string, err error) error {
+	return a.logger.LogError(c, audit.ResourceType(resourceType), resourceID, audit.Action(action), err)
 }

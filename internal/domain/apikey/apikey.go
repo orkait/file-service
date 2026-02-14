@@ -2,6 +2,7 @@ package apikey
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,10 +72,5 @@ func (k *APIKey) IsActive() bool {
 
 // HasPermission returns true if the API key has the given permission
 func (k *APIKey) HasPermission(perm Permission) bool {
-	for _, p := range k.Permissions {
-		if p == perm {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(k.Permissions, perm)
 }

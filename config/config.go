@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 )
@@ -43,12 +44,9 @@ func LoadConfig() (*Config, error) {
 		config.PaginationPageSize = 100
 	}
 
-	if config.AwsAccessKeyID == "" {
-		return nil, fmt.Errorf("AWS_ACCESS_KEY_ID must be set")
-	}
-
-	if config.AwsSecretAccessKey == "" {
-		return nil, fmt.Errorf("AWS_SECRET_ACCESS_KEY must be set")
+	// AWS keys are optional — ECS Task Role provides credentials automatically
+	if config.AwsAccessKeyID == "" || config.AwsSecretAccessKey == "" {
+		log.Println("WARNING: AWS credentials not provided via env vars. Using SDK default credential chain (IAM role/instance profile).")
 	}
 
 	return config, nil

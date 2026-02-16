@@ -1,0 +1,66 @@
+{
+  "family": "file-service",
+  "taskRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/ecsTaskRole",
+  "executionRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/ecsTaskExecutionRole",
+  "networkMode": "bridge",
+  "containerDefinitions": [
+    {
+      "name": "file-service",
+      "image": "<IMAGE1_NAME>",
+      "cpu": 256,
+      "memory": 512,
+      "memoryReservation": 256,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "hostPort": 0,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "BUCKET_NAME",
+          "value": "<BUCKET_NAME>"
+        },
+        {
+          "name": "REGION",
+          "value": "<AWS_REGION>"
+        },
+        {
+          "name": "DOWNLOAD_URL_TIME_LIMIT",
+          "value": "<DOWNLOAD_URL_TIME_LIMIT>"
+        },
+        {
+          "name": "PAGINATION_PAGE_SIZE",
+          "value": "<PAGINATION_PAGE_SIZE>"
+        },
+        {
+          "name": "PORT",
+          "value": "8080"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/file-service",
+          "awslogs-region": "<AWS_REGION>",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:8080/ping || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      }
+    }
+  ],
+  "requiresCompatibilities": ["EC2"],
+  "cpu": "256",
+  "memory": "512"
+}

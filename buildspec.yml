@@ -1,0 +1,59 @@
+version: 0.2
+
+env:
+  variables:
+    GO_VERSION: "1.20"
+    IMAGE_REPO_NAME: "file-service"
+    CONTAINER_NAME: "file-service"
+
+phases:
+  install:
+    runtime-versions:
+      golang: 1.20
+    commands:
+      - echo "Installing dependencies..."
+      - go mod download
+
+  pre_build:
+    commands:
+      - echo "Running go vet..."
+      - go vet ./...
+      - echo "Running tests..."
+      - go test -v ./...
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      - BRANCH_TAG="test-deploy-latest"
+
+  build:
+    commands:
+      - echo "Building Docker image..."
+      - docker build -t $REPOSITORY_URI:$IMAGE_TAG .
+      - docker tag $REPOSITORY_URI:$IMAGE_TAG $REPOSITORY_URI:$BRANCH_TAG
+
+  post_build:
+    commands:
+      - echo "Pushing Docker images to ECR..."
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - docker push $REPOSITORY_URI:$BRANCH_TAG
+      - echo "Generating deployment artifacts..."
+      # Substitute placeholders in taskdef.json with real values from CodeBuild env vars
+      - sed -i 's|<AWS_ACCOUNT_ID>|'"$AWS_ACCOUNT_ID"'|g' taskdef.json
+      - sed -i 's|<AWS_REGION>|'"$AWS_DEFAULT_REGION"'|g' taskdef.json
+      - sed -i 's|<BUCKET_NAME>|'"$BUCKET_NAME"'|g' taskdef.json
+      - sed -i 's|<DOWNLOAD_URL_TIME_LIMIT>|'"$DOWNLOAD_URL_TIME_LIMIT"'|g' taskdef.json
+      - sed -i 's|<PAGINATION_PAGE_SIZE>|'"$PAGINATION_PAGE_SIZE"'|g' taskdef.json
+      # Generate imagedefinitions.json (used by ECS standard deploy)
+      - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+      # Generate imageDetail.json (used by CodeDeploy Blue/Green)
+      - printf '{"ImageURI":"%s"}' $REPOSITORY_URI:$IMAGE_TAG > imageDetail.json
+      - echo "Build completed on $(date)"
+
+artifacts:
+  files:
+    - imagedefinitions.json
+    - imageDetail.json
+    - appspec.yaml
+    - taskdef.json

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"file-management-service/config"
 	"file-management-service/pkg/cache"
 	"file-management-service/routes"
@@ -8,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -85,7 +88,29 @@ func main() {
 	// Register routes
 	routes.RegisterRoutes(e, AppConfig, cache)
 
-	// Start the server
-	e.Start(getPort())
-	log.Println("Server Started!!!")
+	// Start server in goroutine
+	go func() {
+		if err := e.Start(getPort()); err != nil && err != http.ErrServerClosed {
+			log.Fatal("Server startup failed:", err)
+		}
+	}()
+
+	log.Println("Server Started!")
+
+	// Wait for interrupt signal for graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+
+	// Graceful shutdown with 30 second timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := e.Shutdown(ctx); err != nil {
+		log.Fatal("Server forced to shutdown:", err)
+	}
+
+	log.Println("Server exited gracefully")
 }

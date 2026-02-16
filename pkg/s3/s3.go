@@ -24,15 +24,23 @@ type S3 struct {
 
 // NewS3 creates a new S3 instance with the specified bucket name and AWS session.
 func NewClient(config *config.Config) (*S3, error) {
-	// Create a new AWS session
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(config.Region), // Replace with your desired AWS region,
-		Credentials: credentials.NewStaticCredentials(
-			config.AwsAccessKeyID,     // Replace with your AWS access key ID
-			config.AwsSecretAccessKey, // Replace with your AWS secret access key
+	// Create AWS config
+	awsConfig := &aws.Config{
+		Region: aws.String(config.Region),
+	}
+
+	// Only use static credentials if provided
+	// Otherwise SDK auto-discovers from IAM role / instance profile
+	if config.AwsAccessKeyID != "" && config.AwsSecretAccessKey != "" {
+		awsConfig.Credentials = credentials.NewStaticCredentials(
+			config.AwsAccessKeyID,
+			config.AwsSecretAccessKey,
 			"",
-		),
-	})
+		)
+	}
+
+	// Create a new AWS session
+	sess, err := session.NewSession(awsConfig)
 
 	if err != nil {
 		return nil, err
@@ -273,9 +281,8 @@ func (s *S3) GenerateDownloadLink(objectKey string, cache *cache.URLCache) (stri
 	expiryTime := 15 * time.Minute
 
 	req, _ := s.svc.GetObjectRequest(&s3.GetObjectInput{
-		Bucket:              aws.String(s.bucketName),
-		Key:                 aws.String(objectKey),
-		ResponseContentType: aws.String("image/png"),
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(objectKey),
 	})
 
 	downloadURL, err := req.Presign(expiryTime) // Set the validity period of the signed URL
@@ -557,7 +564,7 @@ func (s *S3) DeleteFolder(folderPath string) error {
 	resp, err := s.svc.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket:  aws.String(s.bucketName),
 		Prefix:  aws.String(folderPath),
-		MaxKeys: aws.Int64(2),
+		MaxKeys: aws.Int64(1000),
 	})
 
 	for _, obj := range resp.Contents {

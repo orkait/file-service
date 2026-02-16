@@ -164,52 +164,59 @@ func (s *S3) ListFiles(folderPath string, nextPageToken string, pageSize int, is
 	return response, nil
 }
 
-func (s *S3) ListAllFiles(folderPath string) (*ListFilesResponse, error) {
-	objects, err := s.ListFiles(folderPath, "", 10, false, &cache.URLCache{})
-	nextToken := objects.NextPageToken
+func (s *S3) ListAllFiles(folderPath string, urlCache *cache.URLCache) (*ListFilesResponse, error) {
+	objects, err := s.ListFiles(folderPath, "", 10, false, urlCache)
 	if err != nil {
 		return nil, err
 	}
 
+	nextToken := objects.NextPageToken
 	var allObjects []ObjectDetails
 
 	// check if next page token is present
 	for nextToken != "" {
-		temp, _ := s.ListFiles(folderPath, nextToken, 10, false, &cache.URLCache{})
+		temp, err := s.ListFiles(folderPath, nextToken, 10, false, urlCache)
+		if err != nil {
+			return nil, err
+		}
 		allObjects = append(allObjects, *temp.Files...)
 
 		if temp.IsLastPage {
 			nextToken = ""
+		} else {
+			nextToken = temp.NextPageToken
 		}
-		nextToken = temp.NextPageToken
 	}
 
 	// Helper function to recursively fetch objects from subfolders
 	var listObjectsRecursively func(path string) error
 	listObjectsRecursively = func(path string) error {
-		objects, err := s.ListFiles(path, "", 10, false, &cache.URLCache{})
+		objects, err := s.ListFiles(path, "", 10, false, urlCache)
+		if err != nil {
+			return err
+		}
+
 		nextToken := objects.NextPageToken
 
 		// check if next page token is present
 		for nextToken != "" {
-			t, _ := s.ListFiles(path, nextToken, 10, false, &cache.URLCache{})
+			t, err := s.ListFiles(path, nextToken, 10, false, urlCache)
+			if err != nil {
+				return err
+			}
 			allObjects = append(allObjects, *t.Files...)
 
 			if t.IsLastPage {
 				nextToken = ""
+			} else {
+				nextToken = t.NextPageToken
 			}
-			nextToken = t.NextPageToken
-		}
-
-		if err != nil {
-			return err
 		}
 
 		// Add the objects from the current folder to the result
 		allObjects = append(allObjects, *objects.Files...)
 
 		// Recursively fetch objects from subfolders
-
 		for _, subfolder := range *objects.Files {
 			if subfolder.IsFolder {
 				err := listObjectsRecursively(subfolder.Name)
@@ -648,6 +655,10 @@ func (s *S3) ListAllFolders(folderPath string) []ObjectDetails {
 		MaxKeys: aws.Int64(1000),
 	})
 
+	if err != nil {
+		return allObjects
+	}
+
 	for _, obj := range resp.Contents {
 
 		if *obj.Key == folderPath {
@@ -664,19 +675,19 @@ func (s *S3) ListAllFolders(folderPath string) []ObjectDetails {
 		}
 	}
 
-	if err != nil {
-		return allObjects
-	}
-
 	nextToken := resp.NextContinuationToken
 
 	for nextToken != nil {
-		curr, _ := s.svc.ListObjectsV2(&s3.ListObjectsV2Input{
+		curr, err := s.svc.ListObjectsV2(&s3.ListObjectsV2Input{
 			Bucket:            aws.String(s.bucketName),
 			Prefix:            aws.String(folderPath),
 			MaxKeys:           aws.Int64(1000),
 			ContinuationToken: nextToken,
 		})
+
+		if err != nil {
+			break
+		}
 
 		for _, obj := range curr.Contents {
 

@@ -22,8 +22,23 @@ func LoadConfig() (*Config, error) {
 	// Retrieve and assign the values from environment variables
 	config.BucketName = os.Getenv("BUCKET_NAME")
 	config.Region = os.Getenv("REGION")
-	config.DownloadURLTimeLimit, _ = strconv.Atoi(os.Getenv("DOWNLOAD_URL_TIME_LIMIT"))
-	config.PaginationPageSize, _ = strconv.Atoi(os.Getenv("PAGINATION_PAGE_SIZE"))
+
+	if val := os.Getenv("DOWNLOAD_URL_TIME_LIMIT"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			config.DownloadURLTimeLimit = parsed
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: Invalid DOWNLOAD_URL_TIME_LIMIT value '%s', using default\n", val)
+		}
+	}
+
+	if val := os.Getenv("PAGINATION_PAGE_SIZE"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			config.PaginationPageSize = parsed
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: Invalid PAGINATION_PAGE_SIZE value '%s', using default\n", val)
+		}
+	}
+
 	config.AwsAccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
 	config.AwsSecretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
 

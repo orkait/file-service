@@ -1,22 +1,23 @@
 package main
 
 import (
+	"context"
 	"file-service/config"
 	"file-service/pkg/cache"
+	"file-service/pkg/s3"
 	"file-service/routes"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
-
-// Global variable to hold the configuration
-var AppConfig *config.Config
 
 func getPort() string {
 	port := os.Getenv("PORT")
@@ -64,28 +65,63 @@ func main() {
 	// Apply CORS middleware
 	e.Use(middleware.CORS())
 
-	config, err := config.LoadConfig()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %s", err)
 	}
 
-	// Assign the configuration to the global variable
-	AppConfig = config
+	// Create S3 client once and reuse
+	s3Client, err := s3.NewClient(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create S3 client: %s", err)
+	}
 
-	cache := cache.NewURLCache()
+	urlCache := cache.NewURLCache()
 
-	// spawn a goroutine to clear the cache every 5 minutes
+	// Context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Spawn goroutine to clear cache with cancellation support
 	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
 		for {
-			time.Sleep(5 * time.Minute)
-			cache.Clear()
+			select {
+			case <-ticker.C:
+				urlCache.Clear()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
 	// Register routes
-	routes.RegisterRoutes(e, AppConfig, cache)
+	routes.RegisterRoutes(e, s3Client, urlCache)
 
-	// Start the server
-	e.Start(getPort())
+	// Graceful shutdown
+	go func() {
+		if err := e.Start(getPort()); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %s", err)
+		}
+	}()
+
 	log.Println("Server Started!!!")
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+	cancel() // Stop cache cleanup goroutine
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		log.Fatalf("Server forced to shutdown: %s", err)
+	}
+
+	log.Println("Server exited")
 }

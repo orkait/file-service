@@ -2,7 +2,6 @@ package routes
 
 import (
 	"errors"
-	"file-service/config"
 	"file-service/pkg/cache"
 	"file-service/pkg/s3"
 	"fmt"
@@ -15,49 +14,49 @@ import (
 )
 
 // RegisterRoutes registers all the routes for the application
-func RegisterRoutes(e *echo.Echo, config *config.Config, cache *cache.URLCache) {
+func RegisterRoutes(e *echo.Echo, s3Client *s3.S3, urlCache *cache.URLCache) {
 	// Define route for uploading images
 	e.POST("/upload", func(c echo.Context) error {
-		return uploadFileHandler(c, config)
+		return uploadFileHandler(c, s3Client)
 	})
 
 	// Define route for serving files
 	e.GET("/download", func(c echo.Context) error {
-		return downloadFileHandler(c, config, cache)
+		return downloadFileHandler(c, s3Client, urlCache)
 	})
 
 	// Delete File
 	e.DELETE("/delete", func(c echo.Context) error {
-		return deleteFileHandler(c, config, cache)
+		return deleteFileHandler(c, s3Client)
 	})
 
 	// Delete File
 	e.DELETE("/delete-folder", func(c echo.Context) error {
-		return deleteFolderHandler(c, config)
+		return deleteFolderHandler(c, s3Client)
 	})
 
 	// List files within current folder
 	e.GET("/list", func(c echo.Context) error {
-		return listFilesHandler(c, config, cache)
+		return listFilesHandler(c, s3Client, urlCache)
 	})
 
 	// list all folders within current folder
 	e.GET("/list-folders", func(c echo.Context) error {
-		return listAllFoldersHandler(c, config)
+		return listAllFoldersHandler(c, s3Client)
 	})
 
 	e.POST("/create-folder", func(c echo.Context) error {
-		return createFolderHandler(c, config)
+		return createFolderHandler(c, s3Client)
 	})
 
 	// Batch upload multiple files
 	e.POST("/batch-upload", func(c echo.Context) error {
-		return batchUploadFileHandler(c, config)
+		return batchUploadFileHandler(c, s3Client)
 	})
 
 	// Batch download - get multiple download URLs
 	e.POST("/batch-download", func(c echo.Context) error {
-		return batchDownloadHandler(c, config, cache)
+		return batchDownloadHandler(c, s3Client, urlCache)
 	})
 
 	// Define route for testing the server
@@ -66,7 +65,7 @@ func RegisterRoutes(e *echo.Echo, config *config.Config, cache *cache.URLCache) 
 
 // Handler to create folder
 // createFolderHandler is a handler function for creating a folder in S3
-func createFolderHandler(c echo.Context, config *config.Config) error {
+func createFolderHandler(c echo.Context, client *s3.S3) error {
 
 	folderName := c.QueryParam("path")
 
@@ -79,16 +78,8 @@ func createFolderHandler(c echo.Context, config *config.Config) error {
 		folderName = folderName + "/"
 	}
 
-	// Create a new S3 client using your desired bucket name and region
-	client, err := s3.NewClient(config)
-	if err != nil {
-		// Handle error creating S3 client
-		response := s3.GetFailureResponse(errors.New("failed to create S3 client"))
-		return c.JSON(http.StatusInternalServerError, response)
-	}
-
 	// Call the CreateFolder function to create the folder
-	err = client.CreateFolder(folderName)
+	err := client.CreateFolder(folderName)
 	if err != nil {
 		// Handle error creating folder
 		response := s3.GetFailureResponse(errors.New("failed to create folder"))
@@ -99,7 +90,7 @@ func createFolderHandler(c echo.Context, config *config.Config) error {
 }
 
 // Handler for image upload
-func uploadFileHandler(c echo.Context, config *config.Config) error {
+func uploadFileHandler(c echo.Context, client *s3.S3) error {
 	folderPath := c.FormValue("path")
 	file, err := c.FormFile("file")
 
@@ -124,15 +115,6 @@ func uploadFileHandler(c echo.Context, config *config.Config) error {
 			fmt.Println("Failed to close uploaded file:", closeErr)
 		}
 	}()
-
-	// Create a new S3 client
-	client, err := s3.NewClient(config)
-	if err != nil {
-		// Handle the error and return an error response
-		errorMessage := fmt.Sprintf("Failed to create S3 client: %s", err.Error())
-		response := s3.GetFailureResponse(errors.New(errorMessage))
-		return c.JSON(http.StatusInternalServerError, response)
-	}
 
 	// Use the file name as it is as the object key
 	objectKey := file.Filename
@@ -162,7 +144,7 @@ func uploadFileHandler(c echo.Context, config *config.Config) error {
 }
 
 // List all files and folders within a folder
-func listFilesHandler(c echo.Context, config *config.Config, cache *cache.URLCache) error {
+func listFilesHandler(c echo.Context, client *s3.S3, urlCache *cache.URLCache) error {
 
 	// bool
 	isFolder, err := strconv.ParseBool(c.QueryParam("isFolder"))
@@ -178,19 +160,11 @@ func listFilesHandler(c echo.Context, config *config.Config, cache *cache.URLCac
 	// Page size for pagination
 	pageSize, err := strconv.Atoi(c.QueryParam("pageSize"))
 	if err != nil {
-		pageSize = config.PaginationPageSize
-	}
-
-	// Create a new S3 client
-	client, err := s3.NewClient(config) // Update with your desired region
-
-	if err != nil {
-		response := s3.GetFailureResponse(err)
-		return c.JSON(http.StatusInternalServerError, response)
+		pageSize = 100 // Default page size
 	}
 
 	// List all the files and folders within the nested folder
-	objects, err := client.ListFiles(folderPath, nextPageToken, pageSize, isFolder, cache)
+	objects, err := client.ListFiles(folderPath, nextPageToken, pageSize, isFolder, urlCache)
 
 	if err != nil {
 		response := s3.GetFailureResponse(err)
@@ -201,19 +175,11 @@ func listFilesHandler(c echo.Context, config *config.Config, cache *cache.URLCac
 	return c.JSON(http.StatusOK, response)
 }
 
-func listAllFilesHandler(c echo.Context, config *config.Config) error {
-	// Create a new S3 client
-	client, err := s3.NewClient(config) // Update with your desired region
-
+func listAllFilesHandler(c echo.Context, client *s3.S3, urlCache *cache.URLCache) error {
 	folderPath := c.QueryParam("path")
 
-	if err != nil {
-		response := s3.GetFailureResponse(err)
-		return c.JSON(http.StatusInternalServerError, response)
-	}
-
 	// List all the files and folders within the nested folder
-	objects, err := client.ListAllFiles(folderPath)
+	objects, err := client.ListAllFiles(folderPath, urlCache)
 
 	if err != nil {
 		response := s3.GetFailureResponse(err)
@@ -223,15 +189,8 @@ func listAllFilesHandler(c echo.Context, config *config.Config) error {
 	return c.JSON(http.StatusOK, objects)
 }
 
-func listAllFoldersHandler(c echo.Context, config *config.Config) error {
-	// Create a new S3 client
-	client, err := s3.NewClient(config) // Update with your desired region
+func listAllFoldersHandler(c echo.Context, client *s3.S3) error {
 	folderPath := c.QueryParam("path")
-
-	if err != nil {
-		response := s3.GetFailureResponse(err)
-		return c.JSON(http.StatusInternalServerError, response)
-	}
 
 	// List all the files and folders within the nested folder
 	objects := client.ListAllFolders(folderPath)
@@ -240,17 +199,10 @@ func listAllFoldersHandler(c echo.Context, config *config.Config) error {
 }
 
 // Handler for downloading a file
-func downloadFileHandler(c echo.Context, config *config.Config, cache *cache.URLCache) error {
+func downloadFileHandler(c echo.Context, client *s3.S3, urlCache *cache.URLCache) error {
 	key := c.QueryParam("path")
 
-	// Create a new S3 client
-	client, err := s3.NewClient(config) // Update with your desired region
-	if err != nil {
-		response := s3.GetFailureResponse(err)
-		return c.JSON(http.StatusInternalServerError, response)
-	}
-
-	url, err := client.GenerateDownloadLink(key, cache)
+	url, err := client.GenerateDownloadLink(key, urlCache)
 
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, s3.GetFailureResponse(err))
@@ -274,19 +226,11 @@ func downloadFileHandler(c echo.Context, config *config.Config, cache *cache.URL
 	return c.JSON(http.StatusInternalServerError, s3.GetFailureResponse(err))
 }
 
-func deleteFileHandler(c echo.Context, config *config.Config, cache *cache.URLCache) error {
-	// bucket := c.QueryParam("bucket")
+func deleteFileHandler(c echo.Context, client *s3.S3) error {
 	path := c.QueryParam("path")
 
-	// Create a new S3 client
-	client, err := s3.NewClient(config) // Update with your desired region
-	if err != nil {
-		response := s3.GetFailureResponse(err)
-		return c.JSON(http.StatusInternalServerError, response)
-	}
-
 	// Delete the file or folder from the S3 bucket
-	err = client.DeleteObject(path)
+	err := client.DeleteObject(path)
 	if err != nil {
 		response := s3.GetFailureResponse(err)
 		return c.JSON(http.StatusInternalServerError, response)
@@ -297,19 +241,11 @@ func deleteFileHandler(c echo.Context, config *config.Config, cache *cache.URLCa
 	return c.JSON(http.StatusOK, response)
 }
 
-func deleteFolderHandler(c echo.Context, config *config.Config) error {
-	// bucket := c.QueryParam("bucket")
+func deleteFolderHandler(c echo.Context, client *s3.S3) error {
 	folderPath := c.QueryParam("path")
 
-	// Create a new S3 client
-	client, err := s3.NewClient(config) // Update with your desired region
-	if err != nil {
-		response := s3.GetFailureResponse(err)
-		return c.JSON(http.StatusInternalServerError, response)
-	}
-
 	// Delete the file or folder from the S3 bucket
-	err = client.DeleteFolder(folderPath)
+	err := client.DeleteFolder(folderPath)
 	if err != nil {
 		response := s3.GetFailureResponse(err)
 		return c.JSON(http.StatusInternalServerError, response)
@@ -327,7 +263,7 @@ func ping(c echo.Context) error {
 }
 
 // batchUploadFileHandler uploads multiple files to S3 concurrently (max 100 files, 10 workers)
-func batchUploadFileHandler(c echo.Context, cfg *config.Config) error {
+func batchUploadFileHandler(c echo.Context, client *s3.S3) error {
 	form, err := c.MultipartForm()
 	if err != nil {
 		response := s3.GetFailureResponse(err)
@@ -348,12 +284,6 @@ func batchUploadFileHandler(c echo.Context, cfg *config.Config) error {
 	if len(files) > s3.MaxBatchSize {
 		response := s3.GetFailureResponse(fmt.Errorf(s3.ErrorMaxBatchExceeded, s3.MaxBatchSize))
 		return c.JSON(http.StatusBadRequest, response)
-	}
-
-	client, err := s3.NewClient(cfg)
-	if err != nil {
-		response := s3.GetFailureResponse(err)
-		return c.JSON(http.StatusInternalServerError, response)
 	}
 
 	var uploadInputs []s3.FileUploadInput
@@ -394,7 +324,7 @@ func batchUploadFileHandler(c echo.Context, cfg *config.Config) error {
 }
 
 // batchDownloadHandler generates presigned download URLs for multiple files
-func batchDownloadHandler(c echo.Context, cfg *config.Config, urlCache *cache.URLCache) error {
+func batchDownloadHandler(c echo.Context, client *s3.S3, urlCache *cache.URLCache) error {
 	var req s3.BatchDownloadRequest
 	if err := c.Bind(&req); err != nil {
 		response := s3.GetFailureResponse(err)
@@ -409,12 +339,6 @@ func batchDownloadHandler(c echo.Context, cfg *config.Config, urlCache *cache.UR
 	if len(req.Paths) > s3.MaxBatchSize {
 		response := s3.GetFailureResponse(fmt.Errorf(s3.ErrorMaxBatchExceeded, s3.MaxBatchSize))
 		return c.JSON(http.StatusBadRequest, response)
-	}
-
-	client, err := s3.NewClient(cfg)
-	if err != nil {
-		response := s3.GetFailureResponse(fmt.Errorf("failed to create S3 client: %w", err))
-		return c.JSON(http.StatusInternalServerError, response)
 	}
 
 	ctx := c.Request().Context()

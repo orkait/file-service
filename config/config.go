@@ -13,6 +13,16 @@ type Config struct {
 	PaginationPageSize   int    `json:"paginationPageSize"`
 	AwsAccessKeyID       string `json:"awsAccessKeyId"`
 	AwsSecretAccessKey   string `json:"awsSecretAccessKey"`
+	DatabaseURL          string `json:"databaseUrl"`
+	JWTSecret            string `json:"jwtSecret"`
+	AppBaseURL           string `json:"appBaseUrl"`
+	AppName              string `json:"appName"`
+	MailProviders        string `json:"mailProviders"`
+	ResendAPIKey         string `json:"resendApiKey"`
+	ResendAPIURL         string `json:"resendApiUrl"`
+	SendGridAPIKey       string `json:"sendGridApiKey"`
+	SendGridAPIURL       string `json:"sendGridApiUrl"`
+	MailFrom             string `json:"mailFrom"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -41,6 +51,16 @@ func LoadConfig() (*Config, error) {
 
 	config.AwsAccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
 	config.AwsSecretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	config.DatabaseURL = os.Getenv("DATABASE_URL")
+	config.JWTSecret = os.Getenv("JWT_SECRET")
+	config.AppBaseURL = os.Getenv("APP_BASE_URL")
+	config.AppName = os.Getenv("APP_NAME")
+	config.MailProviders = os.Getenv("MAIL_PROVIDERS")
+	config.ResendAPIKey = os.Getenv("RESEND_API_KEY")
+	config.ResendAPIURL = os.Getenv("RESEND_API_URL")
+	config.SendGridAPIKey = os.Getenv("SENDGRID_API_KEY")
+	config.SendGridAPIURL = os.Getenv("SENDGRID_API_URL")
+	config.MailFrom = os.Getenv("MAIL_FROM")
 
 	if config.BucketName == "" {
 		return nil, fmt.Errorf("BUCKET_NAME must be set")
@@ -64,6 +84,22 @@ func LoadConfig() (*Config, error) {
 
 	if config.AwsSecretAccessKey == "" {
 		return nil, fmt.Errorf("AWS_SECRET_ACCESS_KEY must be set")
+	}
+
+	if config.DatabaseURL == "" {
+		return nil, fmt.Errorf("DATABASE_URL must be set")
+	}
+
+	if config.JWTSecret == "" {
+		return nil, fmt.Errorf("JWT_SECRET must be set")
+	}
+
+	if config.AppBaseURL == "" {
+		config.AppBaseURL = "http://localhost:3000"
+	}
+
+	if config.AppName == "" {
+		config.AppName = "Orka File Service"
 	}
 
 	return config, nil

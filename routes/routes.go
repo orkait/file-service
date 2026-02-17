@@ -347,3 +347,71 @@ func batchDownloadHandler(c echo.Context, client *s3.S3, urlCache *cache.URLCach
 	response := s3.GetSuccessResponseWithData(result)
 	return c.JSON(http.StatusOK, response)
 }
+
+// RegisterMultiTenantRoutes registers all multi-tenant routes
+func RegisterMultiTenantRoutes(
+	e *echo.Echo,
+	authRoutes *AuthRoutes,
+	clientRoutes *ClientRoutes,
+	projectRoutes *ProjectRoutes,
+	apiKeyRoutes *APIKeyRoutes,
+	assetRoutes *AssetRoutes,
+	memberRoutes *MemberRoutes,
+	jwtMiddleware echo.MiddlewareFunc,
+	apiKeyMiddleware echo.MiddlewareFunc,
+) {
+	// Public auth routes
+	auth := e.Group("/auth")
+	auth.POST("/register", authRoutes.Register)
+	auth.POST("/clients", authRoutes.CreateClient)
+	auth.POST("/login", authRoutes.Login)
+	auth.POST("/refresh", authRoutes.RefreshToken)
+	auth.POST("/forgot-password", authRoutes.ForgotPassword)
+	auth.POST("/reset-password", authRoutes.ResetPassword)
+	e.POST("/clients", authRoutes.CreateClient)
+
+	// Protected client routes (JWT auth)
+	api := e.Group("/api", jwtMiddleware)
+
+	// Client account lifecycle
+	api.GET("/clients", clientRoutes.ListClients)
+	api.GET("/clients/me", clientRoutes.GetMyClient)
+	api.GET("/clients/:id", clientRoutes.GetClientByID)
+	api.PATCH("/clients/me", clientRoutes.UpdateMyClient)
+	api.DELETE("/clients/me", clientRoutes.DeleteMyAccount)
+
+	// Projects
+	api.POST("/projects", projectRoutes.CreateProject)
+	api.GET("/projects", projectRoutes.GetProjects)
+	api.GET("/projects/:id", projectRoutes.GetProject)
+
+	// Project Members
+	api.POST("/projects/:project_id/members", memberRoutes.InviteMember)
+	api.GET("/projects/:project_id/members", memberRoutes.GetMembers)
+	api.DELETE("/projects/:project_id/members/:member_id", memberRoutes.RemoveMember)
+
+	// API Keys
+	api.POST("/api-keys", apiKeyRoutes.CreateAPIKey)
+	api.GET("/api-keys", apiKeyRoutes.GetAPIKeys)
+	api.DELETE("/api-keys/:id", apiKeyRoutes.RevokeAPIKey)
+
+	// Assets (JWT auth)
+	api.GET("/upload-url", assetRoutes.GetUploadURL)
+	api.POST("/assets/confirm", assetRoutes.ConfirmUpload)
+	api.POST("/assets", assetRoutes.UploadAsset)
+	api.GET("/assets", assetRoutes.GetAssets)
+	api.GET("/assets/:id", assetRoutes.GetAsset)
+	api.GET("/assets/:id/versions", assetRoutes.GetAssetVersions)
+	api.DELETE("/assets/:id", assetRoutes.DeleteAsset)
+	api.GET("/folders", assetRoutes.GetFolders)
+
+	// API Key routes (for developers using API keys)
+	apiKeyGroup := e.Group("/v1", apiKeyMiddleware)
+	apiKeyGroup.GET("/upload-url", assetRoutes.GetUploadURL)
+	apiKeyGroup.POST("/assets/confirm", assetRoutes.ConfirmUpload)
+	apiKeyGroup.POST("/upload", assetRoutes.UploadAsset)
+	apiKeyGroup.GET("/assets", assetRoutes.GetAssets)
+	apiKeyGroup.GET("/assets/:id", assetRoutes.GetAsset)
+	apiKeyGroup.GET("/assets/:id/versions", assetRoutes.GetAssetVersions)
+	apiKeyGroup.GET("/folders", assetRoutes.GetFolders)
+}

@@ -1,0 +1,72 @@
+# Docker Compose for stress testing — simulates AWS instance types
+#
+# Profiles (pick one):
+#   t3-micro  → 1 vCPU, 1GB RAM  (AWS t3.micro)
+#   t3-small  → 2 vCPU, 2GB RAM  (AWS t3.small)
+#   t3-medium → 2 vCPU, 4GB RAM  (AWS t3.medium)
+#
+# Usage:
+#   docker compose -f docker-compose.stress.yml --profile t3-micro  up --build
+#   docker compose -f docker-compose.stress.yml --profile t3-small  up --build
+#   docker compose -f docker-compose.stress.yml --profile t3-medium up --build
+
+version: "3.8"
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/ping"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+
+services:
+  # ── AWS t3.micro: 1 vCPU, 1 GB RAM ────────────────────
+  file-service-t3-micro:
+    <<: *common
+    profiles: ["t3-micro"]
+    ports:
+      - "8080:8080"
+    environment:
+      - ENABLE_PROFILING=true
+      - DISABLE_RATE_LIMITER=true
+      - GOMEMLIMIT=800MiB
+      - GOGC=50
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: "1.0"
+
+  # ── AWS t3.small: 2 vCPU, 2 GB RAM ────────────────────
+  file-service-t3-small:
+    <<: *common
+    profiles: ["t3-small"]
+    ports:
+      - "8080:8080"
+    environment:
+      - ENABLE_PROFILING=true
+      - DISABLE_RATE_LIMITER=true
+      - GOMEMLIMIT=1600MiB
+      - GOGC=75
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: "2.0"
+
+  # ── AWS t3.medium: 2 vCPU, 4 GB RAM ───────────────────
+  file-service-t3-medium:
+    <<: *common
+    profiles: ["t3-medium"]
+    ports:
+      - "8080:8080"
+    environment:
+      - ENABLE_PROFILING=true
+      - DISABLE_RATE_LIMITER=true
+      - GOMEMLIMIT=3200MiB
+      - GOGC=100
+    mem_limit: 4g
+    memswap_limit: 4g
+    cpus: "2.0"

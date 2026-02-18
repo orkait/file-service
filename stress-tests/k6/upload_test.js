@@ -32,13 +32,16 @@ export const options = {
 const BASE_URL = __ENV.BASE_URL || "http://localhost:8080";
 const TEST_FILE_SIZE = parseInt(__ENV.FILE_SIZE_KB || "100"); // Default 100KB test files
 
-// Generate random binary data of specified size
+// Generate random binary string of specified size (string is JSON-serializable)
 function generateTestFile(sizeKB) {
-  const bytes = new Uint8Array(sizeKB * 1024);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = Math.floor(Math.random() * 256);
+  const size = sizeKB * 1024;
+  let result = "";
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < size; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  return bytes.buffer;
+  return result;
 }
 
 export function setup() {
@@ -49,13 +52,10 @@ export function setup() {
 }
 
 export default function (data) {
-  const fileName = `stress-test-${__VU}-${__ITER}-${Date.now()}.bin`;
+  const fileName = `stress-test-${__VU}-${__ITER}-${Date.now()}.txt`;
 
   const fd = new FormData();
-  fd.append(
-    "file",
-    http.file(data.fileData, fileName, "application/octet-stream"),
-  );
+  fd.append("file", http.file(data.fileData, fileName, "text/plain"));
   fd.append("path", "stress-test-uploads/");
 
   const res = http.post(`${BASE_URL}/upload`, fd.body(), {

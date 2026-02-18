@@ -1,0 +1,24 @@
+goos: linux
+goarch: amd64
+pkg: file-management-service/pkg/cache
+cpu: AMD Ryzen 7 6800H with Radeon Graphics         
+BenchmarkCacheGet-16               	 8791470	       132.5 ns/op	      13 B/op	       1 allocs/op
+BenchmarkCacheGet-16               	 8827237	       133.1 ns/op	      13 B/op	       1 allocs/op
+BenchmarkCacheGet-16               	 8702652	       135.0 ns/op	      13 B/op	       1 allocs/op
+BenchmarkCacheSet-16               	 1804699	       812.4 ns/op	     370 B/op	       4 allocs/op
+BenchmarkCacheSet-16               	 1640708	       637.4 ns/op	     241 B/op	       4 allocs/op
+BenchmarkCacheSet-16               	 1623051	       656.7 ns/op	     243 B/op	       4 allocs/op
+BenchmarkCacheGetParallel-16       	34967127	        37.57 ns/op	      13 B/op	       1 allocs/op
+BenchmarkCacheGetParallel-16       	31643942	        37.97 ns/op	      13 B/op	       1 allocs/op
+BenchmarkCacheGetParallel-16       	29885967	        36.62 ns/op	      13 B/op	       1 allocs/op
+BenchmarkCacheMixedReadWrite-16    	 6165626	       195.1 ns/op	      20 B/op	       1 allocs/op
+BenchmarkCacheMixedReadWrite-16    	 6254917	       193.3 ns/op	      20 B/op	       1 allocs/op
+BenchmarkCacheMixedReadWrite-16    	 6136274	       197.8 ns/op	      20 B/op	       1 allocs/op
+BenchmarkCacheClear-16             	   47631	     25303 ns/op	    2449 B/op	     200 allocs/op
+BenchmarkCacheClear-16             	   47637	     25002 ns/op	    2447 B/op	     200 allocs/op
+BenchmarkCacheClear-16             	   47736	     24861 ns/op	    2438 B/op	     200 allocs/op
+BenchmarkCacheMemoryPressure-16    	 1000000	      1021 ns/op	     380 B/op	       4 allocs/op
+BenchmarkCacheMemoryPressure-16    	 1214923	       900.4 ns/op	     331 B/op	       4 allocs/op
+BenchmarkCacheMemoryPressure-16    	 1000000	      1022 ns/op	     380 B/op	       4 allocs/op
+PASS
+ok  	file-management-service/pkg/cache	27.331s

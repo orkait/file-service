@@ -35,11 +35,14 @@ const BATCH_SIZE = parseInt(__ENV.BATCH_SIZE || "5"); // Files per batch
 const FILE_SIZE_KB = parseInt(__ENV.FILE_SIZE_KB || "50"); // Smaller files for batch
 
 function generateTestFile(sizeKB) {
-  const bytes = new Uint8Array(sizeKB * 1024);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = Math.floor(Math.random() * 256);
+  const size = sizeKB * 1024;
+  let result = "";
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < size; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  return bytes.buffer;
+  return result;
 }
 
 export function setup() {
@@ -59,10 +62,7 @@ export default function (data) {
   for (let i = 0; i < BATCH_SIZE; i++) {
     const fileName = `batch-${__VU}-${__ITER}-${i}.bin`;
     uploadedFileNames.push(`${folderName}${fileName}`);
-    fd.append(
-      "files",
-      http.file(data.fileData, fileName, "application/octet-stream"),
-    );
+    fd.append("files", http.file(data.fileData, fileName, "text/plain"));
   }
 
   const uploadRes = http.post(`${BASE_URL}/batch-upload`, fd.body(), {

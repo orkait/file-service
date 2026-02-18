@@ -1,0 +1,18 @@
+goos: linux
+goarch: amd64
+pkg: file-management-service/routes
+cpu: AMD Ryzen 7 6800H with Radeon Graphics         
+BenchmarkPingHandler-16                    	  833892	      1318 ns/op	    1777 B/op	      18 allocs/op
+BenchmarkPingHandler-16                    	  767636	      1381 ns/op	    1777 B/op	      18 allocs/op
+BenchmarkPingHandler-16                    	  888975	      1299 ns/op	    1777 B/op	      18 allocs/op
+BenchmarkPingHandlerParallel-16            	  894110	      1320 ns/op	    6539 B/op	      26 allocs/op
+BenchmarkPingHandlerParallel-16            	  891158	      1242 ns/op	    6539 B/op	      26 allocs/op
+BenchmarkPingHandlerParallel-16            	  940078	      1295 ns/op	    6538 B/op	      26 allocs/op
+BenchmarkJSONSerialization-16              	  997782	      1190 ns/op	    1777 B/op	      18 allocs/op
+BenchmarkJSONSerialization-16              	 1003862	      1275 ns/op	    1777 B/op	      18 allocs/op
+BenchmarkJSONSerialization-16              	  961119	      1336 ns/op	    1777 B/op	      18 allocs/op
+BenchmarkBatchDownloadRequestParsing-16    	   75858	     15241 ns/op	   11556 B/op	      85 allocs/op
+BenchmarkBatchDownloadRequestParsing-16    	   80560	     14977 ns/op	   11556 B/op	      85 allocs/op
+BenchmarkBatchDownloadRequestParsing-16    	   79766	     15135 ns/op	   11556 B/op	      85 allocs/op
+PASS
+ok  	file-management-service/routes	18.523s

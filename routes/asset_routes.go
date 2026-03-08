@@ -32,11 +32,8 @@ func NewAssetRoutes(s3Client *s3.S3, assetRepo *repository.AssetRepository, proj
 	}
 }
 
-func buildS3Key(clientID, projectID, folderPath, assetID, filename string) string {
-	if folderPath == "" {
-		folderPath = "/"
-	}
-	return fmt.Sprintf("%s/%s%s%s/%s", clientID, projectID, folderPath, assetID, filename)
+func buildS3Key(clientID, projectID, assetID, filename string) string {
+	return fmt.Sprintf("%s/%s/%s/%s", clientID, projectID, assetID, filename)
 }
 
 func normalizeFolderPath(folderPath string) string {
@@ -84,7 +81,7 @@ func (ar *AssetRoutes) UploadAsset(c echo.Context) error {
 	defer src.Close()
 
 	assetID := uuid.New().String()
-	s3Key := buildS3Key(clientID, projectID, folderPath, assetID, file.Filename)
+	s3Key := buildS3Key(clientID, projectID, assetID, file.Filename)
 
 	if err := ar.s3Client.UploadFile(src, s3Key); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to upload file"})
@@ -189,7 +186,6 @@ func (ar *AssetRoutes) DeleteAsset(c echo.Context) error {
 func (ar *AssetRoutes) GetUploadURL(c echo.Context) error {
 	clientID := c.Get("client_id").(string)
 	projectID := c.QueryParam("project_id")
-	folderPath := normalizeFolderPath(c.QueryParam("folder_path"))
 	filename := c.QueryParam("filename")
 
 	if projectID == "" || filename == "" {
@@ -203,7 +199,7 @@ func (ar *AssetRoutes) GetUploadURL(c echo.Context) error {
 	assetID := uuid.New().String()
 	ext := filepath.Ext(filename)
 	generatedFilename := assetID + ext
-	s3Key := buildS3Key(clientID, projectID, folderPath, assetID, generatedFilename)
+	s3Key := buildS3Key(clientID, projectID, assetID, generatedFilename)
 
 	presignedPost, err := ar.s3Client.GeneratePresignedPost(s3Key, 100*1024*1024, 15*time.Minute)
 	if err != nil {

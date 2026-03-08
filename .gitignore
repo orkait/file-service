@@ -25,3 +25,5 @@ config/config.json
 
 .env
 .env.local
+
+.kiro/*
